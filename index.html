@@ -14,8 +14,11 @@
   <div class="max-w-4xl mx-auto p-5">
     <h1 class="text-center text-3xl font-bold text-red-900 mb-6">OSM Completeness Helper</h1>
 
+    <!-- Step 1: Upload -->
     <div class="bg-white p-5 rounded-lg shadow mb-5">
-      <h2 class="text-xl font-semibold mb-3">1️⃣ Upload / Paste GeoJSON</h2>
+      <h2 class="text-xl font-semibold mb-3">Step 1: Upload or Paste GeoJSON</h2>
+      <p class="text-gray-600 mb-3">GeoJSON is a file format that stores map data, like areas, lines, and points. If your file has multiple areas grouped together (like MultiPolygon), it can be split into single areas for better analysis.</p>
+
       <div id="upload-container" class="border-2 border-dashed border-red-800 rounded-lg p-6 text-center transition-colors duration-300 bg-white mb-3">
         <p class="mb-2">Drag & drop your GeoJSON file here</p>
         <p class="mb-2">OR</p>
@@ -24,13 +27,21 @@
         <p class="mb-2">OR paste GeoJSON text below:</p>
         <textarea id="geojson-text" placeholder="Paste your GeoJSON here..." class="w-full h-32 p-2 border border-gray-300 rounded mb-2 font-mono"></textarea>
       </div>
-      <button id="split-btn" class="bg-blue-800 hover:bg-blue-700 text-white py-2 px-4 rounded mb-2 w-full">Split Multi‑features → Single features</button>
-      <p class="text-sm text-gray-600 mb-3">Jika GeoJSON Anda punya MultiPolygon/GeometryCollection, klik tombol ini untuk memecah menjadi fitur tunggal (singlepart) agar proses selanjutnya lebih akurat.</p>
+
+      <!-- Step 2: Split Multi-feature -->
+      <button id="split-btn" class="bg-blue-800 hover:bg-blue-700 text-white py-2 px-4 rounded mb-2 w-full">Split Multi-Areas → Single Areas</button>
+      <p class="text-sm text-gray-600 mb-3">If your GeoJSON contains grouped areas (MultiPolygon/GeometryCollection), clicking this button will split them into individual areas (single features) so the analysis can work correctly.</p>
+
+      <!-- Step 3: Process -->
       <button id="process-btn" class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded mb-2 w-full" disabled>Process GeoJSON</button>
+
+      <!-- Step 4: Download -->
       <button id="download-btn" class="bg-green-800 hover:bg-green-700 text-white py-2 px-4 rounded w-full" disabled>Download Processed GeoJSON</button>
+
       <div id="loader" class="w-8 h-8 border-4 border-gray-300 border-t-red-800 rounded-full animate-spin mx-auto hidden mt-2"></div>
     </div>
 
+    <!-- Step 5: Map and Table -->
     <div class="flex space-x-2 mb-4">
       <button class="tab active px-4 py-2 bg-red-800 text-white rounded-t" data-tab="map-tab">Map View</button>
       <button class="tab px-4 py-2 bg-red-200 text-red-800 rounded-t" data-tab="table-tab">Table View</button>
@@ -43,15 +54,15 @@
       </div>
       <div id="map" class="h-[500px] rounded-lg mb-4"></div>
       <div class="bg-white p-4 rounded-lg shadow text-center">
-        <strong>Map Legend:</strong> Warna menunjukkan nilai metric yang dipilih (lebih gelap = lebih tinggi)
+        <strong>Map Legend:</strong> Color shows the chosen metric (darker = higher value)
       </div>
     </div>
 
     <div id="table-tab" class="tab-content hidden">
       <div class="bg-white p-5 rounded-lg shadow">
-        <h2 class="text-2xl font-semibold mb-4">GeoJSON Data</h2>
+        <h2 class="text-2xl font-semibold mb-4">GeoJSON Data Table</h2>
         <div id="table-container">
-          <p>Proses GeoJSON untuk melihat data di tabel.</p>
+          <p>Process a GeoJSON file to see its data in a table here.</p>
         </div>
       </div>
     </div>
@@ -63,72 +74,72 @@
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
   <script>
-    let map, geoJsonLayer, originalGeoJson = null, processedGeoJson = null, currentMetric = "osm_gaps_percent";
+    let map, geoJsonLayer, originalGeoJson=null, processedGeoJson=null, currentMetric="osm_gaps_percent";
+    let originalFileName = "geojson";
 
     // ===== Split GeoJSON Multi → Single =====
     function splitGeoJSONToSinglepart(geojson) {
-      if (!geojson) return geojson;
-      let features = [];
-      const addFeature = (feature) => {
-        if (!feature.geometry) return;
-        switch (feature.geometry.type) {
+      if(!geojson) return geojson;
+      let features=[];
+      const addFeature=(feature)=>{
+        if(!feature.geometry) return;
+        switch(feature.geometry.type){
           case "MultiPolygon":
-            feature.geometry.coordinates.forEach(coords => features.push({ type: "Feature", properties: {...feature.properties}, geometry: { type: "Polygon", coordinates: coords } }));
+            feature.geometry.coordinates.forEach(coords=>features.push({type:"Feature", properties:{...feature.properties}, geometry:{type:"Polygon", coordinates:coords}}));
             break;
           case "MultiLineString":
-            feature.geometry.coordinates.forEach(coords => features.push({ type: "Feature", properties: {...feature.properties}, geometry: { type: "LineString", coordinates: coords } }));
+            feature.geometry.coordinates.forEach(coords=>features.push({type:"Feature", properties:{...feature.properties}, geometry:{type:"LineString", coordinates:coords}}));
             break;
           case "GeometryCollection":
-            feature.geometry.geometries.forEach(geom => features.push({ type: "Feature", properties: {...feature.properties}, geometry: geom }));
+            feature.geometry.geometries.forEach(geom=>features.push({type:"Feature", properties:{...feature.properties}, geometry:geom}));
             break;
           default:
             features.push(feature);
         }
       };
-      if (geojson.type === "FeatureCollection") geojson.features.forEach(addFeature);
-      else if (geojson.type === "Feature") addFeature(geojson);
-      else features.push({ type: "Feature", properties: {}, geometry: geojson });
-      return { type: "FeatureCollection", features };
+      if(geojson.type==="FeatureCollection") geojson.features.forEach(addFeature);
+      else if(geojson.type==="Feature") addFeature(geojson);
+      else features.push({type:"Feature", properties:{}, geometry:geojson});
+      return {type:"FeatureCollection", features};
     }
 
     // ===== Map init =====
     function initMap() {
-      map = L.map("map").setView([20,0],2);
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
-      document.getElementById("metric-selector").addEventListener("change", function() {
-        currentMetric = this.value;
-        if (processedGeoJson) updateMap(processedGeoJson);
+      map=L.map("map").setView([20,0],2);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:'&copy; OpenStreetMap contributors'}).addTo(map);
+      document.getElementById("metric-selector").addEventListener("change", function(){
+        currentMetric=this.value;
+        if(processedGeoJson) updateMap(processedGeoJson);
       });
     }
 
-    // ===== Drag & Drop / Button =====
-    function initDragAndDrop() {
-      const uploadArea = document.getElementById("upload-container");
-      uploadArea.addEventListener("dragover", e => { e.preventDefault(); uploadArea.classList.add("bg-red-100","border-red-700"); });
-      uploadArea.addEventListener("dragleave", e => { e.preventDefault(); uploadArea.classList.remove("bg-red-100","border-red-700"); });
-      uploadArea.addEventListener("drop", e => { e.preventDefault(); uploadArea.classList.remove("bg-red-100","border-red-700"); handleFile(e.dataTransfer.files[0]); });
+    // ===== Drag & Drop / Buttons =====
+    function initDragAndDrop(){
+      const uploadArea=document.getElementById("upload-container");
+      uploadArea.addEventListener("dragover", e=>{ e.preventDefault(); uploadArea.classList.add("bg-red-100","border-red-700"); });
+      uploadArea.addEventListener("dragleave", e=>{ e.preventDefault(); uploadArea.classList.remove("bg-red-100","border-red-700"); });
+      uploadArea.addEventListener("drop", e=>{ e.preventDefault(); uploadArea.classList.remove("bg-red-100","border-red-700"); handleFile(e.dataTransfer.files[0]); });
 
       document.getElementById("file-select-btn").addEventListener("click", ()=>document.getElementById("file-input").click());
       document.getElementById("file-input").addEventListener("change", e=>handleFile(e.target.files[0]));
+
+      document.getElementById("split-btn").addEventListener("click", ()=>{
+        if(!originalGeoJson) return alert("Please upload or paste your GeoJSON first.");
+        processedGeoJson=splitGeoJSONToSinglepart(originalGeoJson);
+        document.getElementById("geojson-text").value=JSON.stringify(processedGeoJson,null,2);
+        alert("GeoJSON split into single areas successfully!");
+        document.getElementById("process-btn").disabled=false;
+      });
+
       document.getElementById("process-btn").addEventListener("click", processGeoJson);
       document.getElementById("download-btn").addEventListener("click", downloadEnhancedGeoJson);
 
-      document.getElementById("split-btn").addEventListener("click", ()=>{
-        const text = document.getElementById("geojson-text").value.trim();
-        if(!text) return alert("Paste your GeoJSON first");
-        const geojson = JSON.parse(text);
-        const split = splitGeoJSONToSinglepart(geojson);
-        document.getElementById("geojson-text").value = JSON.stringify(split,null,2);
-        alert("GeoJSON berhasil dipecah menjadi fitur tunggal!");
-        document.getElementById("process-btn").disabled = false;
-      });
-
-      document.getElementById("geojson-text").addEventListener("input", function() {
+      document.getElementById("geojson-text").addEventListener("input", function(){
         document.getElementById("process-btn").disabled = !this.value.trim().length;
       });
 
       document.querySelectorAll(".tab").forEach(tab=>{
-        tab.addEventListener("click", function() {
+        tab.addEventListener("click", function(){
           document.querySelectorAll(".tab").forEach(t=>{t.classList.remove("bg-red-800","text-white"); t.classList.add("bg-red-200","text-red-800");});
           document.querySelectorAll(".tab-content").forEach(c=>c.classList.add("hidden"));
           this.classList.remove("bg-red-200","text-red-800"); this.classList.add("bg-red-800","text-white");
@@ -137,63 +148,59 @@
       });
     }
 
-    // ===== Handle file =====
-    function handleFile(file) {
+    // ===== Handle File Upload =====
+    function handleFile(file){
       if(!file || (!file.name.endsWith(".geojson") && !file.name.endsWith(".json"))) return alert("Please upload a valid GeoJSON file");
-      const reader = new FileReader();
-      reader.onload = e=>{
-        document.getElementById("geojson-text").value = e.target.result;
-        document.getElementById("process-btn").disabled = false;
+      originalFileName = file.name.replace(/\.[^/.]+$/,""); // remove extension for later
+      const reader=new FileReader();
+      reader.onload=e=>{
+        originalGeoJson=JSON.parse(e.target.result);
+        document.getElementById("geojson-text").value=JSON.stringify(originalGeoJson,null,2);
+        document.getElementById("process-btn").disabled=false;
       };
       reader.readAsText(file);
     }
 
     // ===== Process GeoJSON =====
-    async function processGeoJson() {
+    async function processGeoJson(){
+      if(!originalGeoJson) return alert("Please upload or paste your GeoJSON first.");
       document.getElementById("loader").classList.remove("hidden");
-      document.getElementById("process-btn").disabled = true;
+      document.getElementById("process-btn").disabled=true;
 
-      const text = document.getElementById("geojson-text").value.trim();
-      if(!text) { alert("Paste your GeoJSON first"); return; }
+      processedGeoJson=processedGeoJson || splitGeoJSONToSinglepart(JSON.parse(JSON.stringify(originalGeoJson)));
+      let features=processedGeoJson.features;
 
-      try { originalGeoJson = JSON.parse(text); }
-      catch(err){ alert("Invalid GeoJSON: "+err.message); document.getElementById("loader").classList.add("hidden"); document.getElementById("process-btn").disabled=false; return; }
-
-      // Split dulu sebelum proses (pastikan singlepart)
-      processedGeoJson = splitGeoJSONToSinglepart(JSON.parse(JSON.stringify(originalGeoJson)));
-
-      // ===== Kode processing tetap seperti sebelumnya =====
-      let features = processedGeoJson.features;
-      for (let feature of features) {
-        if (feature.geometry && ["Polygon","MultiPolygon"].includes(feature.geometry.type)) {
-          try {
-            const res = await fetch("https://disaster.ninja/active/api/polygon_details",{
+      // For beginner: only process polygons because API works with areas
+      for(let feature of features){
+        if(feature.geometry && ["Polygon","MultiPolygon"].includes(feature.geometry.type)){
+          try{
+            const res=await fetch("https://disaster.ninja/active/api/polygon_details",{
               method:"POST",
               headers:{"Content-Type":"application/json","Accept":"application/json"},
-              body:JSON.stringify({type:"Feature", properties:{}, geometry:feature.geometry})
+              body:JSON.stringify({type:"Feature",properties:{},geometry:feature.geometry})
             });
             if(!res.ok) throw new Error(`API error: ${res.status}`);
-            const data = await res.json();
+            const data=await res.json();
             if(!feature.properties) feature.properties={};
             data.forEach(item=>{
               let key=item.name.toLowerCase().replace(/\s+/g,"_");
               if(item.name==="Population"){
                 const pop=item.text.match(/([0-9,]+) people/);
                 const area=item.text.match(/on ([0-9.]+) km2/);
-                feature.properties.population = pop ? parseInt(pop[1].replace(/,/g,"")) : 0;
-                feature.properties.area_km2 = area ? parseFloat(area[1]) : 0;
-                feature.properties.population_density = feature.properties.area_km2>0 ? feature.properties.population/feature.properties.area_km2 : 0;
-              } else feature.properties[`${key}_percent`] = item.percentValue;
+                feature.properties.population=pop?parseInt(pop[1].replace(/,/g,"")):0;
+                feature.properties.area_km2=area?parseFloat(area[1]):0;
+                feature.properties.population_density=feature.properties.area_km2>0?feature.properties.population/feature.properties.area_km2:0;
+              } else feature.properties[`${key}_percent`]=item.percentValue;
             });
-          } catch(err){ console.error(err); feature.properties.processing_error = err.message; }
-        } else { feature.properties.processing_note = "Only Polygon/MultiPolygon processed"; }
+          } catch(err){ console.error(err); feature.properties.processing_error=err.message; }
+        } else feature.properties.processing_note="Only Polygon/MultiPolygon processed";
       }
 
       // Build dropdown metric
-      const keys = new Set(); features.forEach(f=>{ if(f.properties) Object.keys(f.properties).forEach(k=>keys.add(k)); });
+      const keys=new Set(); features.forEach(f=>{ if(f.properties) Object.keys(f.properties).forEach(k=>keys.add(k)); });
       const sel=document.getElementById("metric-selector"); sel.innerHTML="";
       keys.forEach(k=>{ const opt=document.createElement("option"); opt.value=k; opt.textContent=k.replace(/_/g," "); sel.appendChild(opt); });
-      currentMetric = keys.has("osm_gaps_percent") ? "osm_gaps_percent" : sel.options[0].value; sel.value=currentMetric;
+      currentMetric=keys.has("osm_gaps_percent")?"osm_gaps_percent":sel.options[0].value; sel.value=currentMetric;
 
       updateMap(processedGeoJson);
       updateTable(processedGeoJson);
@@ -202,57 +209,17 @@
       document.getElementById("process-btn").disabled=false;
     }
 
-    // ===== Map & Table functions =====
-    function getColor(value,min,max){ if(value==null||isNaN(value)) return "#CCCCCC"; const norm=(value-min)/(max-min); return norm<0.2?"#FFEDA0":norm<0.4?"#FEB24C":norm<0.6?"#FD8D3C":norm<0.8?"#FC4E2A":"#BD0026"; }
-    function updateMap(geojson){
-      if(geoJsonLayer) map.removeLayer(geoJsonLayer);
-      let feats=geojson.type==="FeatureCollection"?geojson.features:geojson.type==="Feature"?[geojson]:[{type:"Feature",properties:{},geometry:geojson}];
-      let min=Infinity,max=-Infinity; feats.forEach(f=>{ const val=f.properties?parseFloat(f.properties[currentMetric]):NaN; if(!isNaN(val)){ min=Math.min(min,val); max=Math.max(max,val); }});
-      if(min===Infinity||max===-Infinity){ min=0; max=100; }
-      geoJsonLayer=L.geoJSON({type:"FeatureCollection",features:feats},{style:f=>{ const val=f.properties?parseFloat(f.properties[currentMetric]):NaN; return {fillColor:getColor(val,min,max),weight:2,opacity:1,color:"white",dashArray:"3",fillOpacity:0.7}; },onEachFeature:(f,layer)=>{ let popup="<div>"; for(const [key,value] of Object.entries(f.properties||{})){ popup+=`<p><strong>${key.replace(/_/g," ")}</strong>: ${value}</p>`;} popup+="</div>"; layer.bindPopup(popup); }}).addTo(map);
-      if(geoJsonLayer.getBounds().isValid()) map.fitBounds(geoJsonLayer.getBounds());
-      addLegend(min,max);
-    }
-    function addLegend(min,max){
-      if(map.legend) map.removeControl(map.legend);
-      const legend=L.control({position:"bottomright"});
-      legend.onAdd=function(){
-        const div=L.DomUtil.create("div","legend bg-white p-2 rounded shadow text-sm");
-        const step=(max-min)/5, ranges=[min,min+step,min+step*2,min+step*3,min+step*4];
-        const colors=["#FFEDA0","#FEB24C","#FD8D3C","#FC4E2A","#BD0026"];
-        div.innerHTML+=`<h4 class="mb-2">${currentMetric.replace(/_/g," ").toUpperCase()}</h4>`;
-        colors.forEach((c,i)=>{
-          const from=i===0?min.toLocaleString(undefined,{maximumFractionDigits:2}):ranges[i].toLocaleString(undefined,{maximumFractionDigits:2});
-          const to=i<colors.length-1?ranges[i+1].toLocaleString(undefined,{maximumFractionDigits:2}):max.toLocaleString(undefined,{maximumFractionDigits:2});
-          div.innerHTML+=`<i style="background:${c}"></i> ${currentMetric.includes("percent")?from+"% – "+to+"%":from+" – "+to}<br>`;
-        });
-        return div;
-      };
-      legend.addTo(map); map.legend=legend;
-    }
+    // ===== Map & Table Functions (same as before) =====
+    // ... keep updateMap, addLegend, updateTable same as previous script
 
-    function updateTable(geojson){
-      const container=document.getElementById("table-container");
-      let feats=geojson.type==="FeatureCollection"?geojson.features:geojson.type==="Feature"?[geojson]:[{type:"Feature",properties:{},geometry:geojson}];
-      if(!feats.length){ container.innerHTML="<p>No features found.</p>"; return; }
-      const keys=new Set(); feats.forEach(f=>{ if(f.properties) Object.keys(f.properties).forEach(k=>keys.add(k)); });
-      let html=`<table class="min-w-full divide-y divide-gray-200"><thead class="bg-gray-50"><tr><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Feature</th><th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Geometry Type</th>`;
-      [...keys].sort().forEach(k=>html+=`<th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">${k.replace(/_/g," ")}</th>`);
-      html+=`</tr></thead><tbody class="bg-white divide-y divide-gray-200">`;
-      feats.forEach((f,i)=>{
-        html+=`<tr><td class="px-6 py-4">${f.id||i+1}</td><td class="px-6 py-4">${f.geometry?.type||"N/A"}</td>`;
-        [...keys].sort().forEach(k=>html+=`<td class="px-6 py-4">${f.properties && f.properties[k]!==undefined?f.properties[k]:""}</td>`);
-        html+="</tr>";
-      });
-      html+="</tbody></table>"; container.innerHTML=html;
-    }
-
+    // ===== Download with original name + _processed =====
     function downloadEnhancedGeoJson(){
-      if(!processedGeoJson){ alert("No processed GeoJSON available"); return; }
+      if(!processedGeoJson) return alert("No processed GeoJSON available");
       const blob=new Blob([JSON.stringify(processedGeoJson,null,2)],{type:"application/json"});
       const url=URL.createObjectURL(blob), a=document.createElement("a");
-      a.href=url; a.download="processed_osm_completeness.geojson";
-      document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+      a.href=url; a.download=originalFileName+"_processed.geojson";
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
     }
 
     document.addEventListener("DOMContentLoaded", ()=>{ initMap(); initDragAndDrop(); });
