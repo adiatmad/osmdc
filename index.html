@@ -16,7 +16,19 @@
   .High { color: red; font-weight: bold; }
 </style>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">// LOAD FILE
+function loadFileGeoJSON(evt){
+  const file = document.getElementById('fileInput').files[0];
+  if(!file) return alert('No file selected');
+  const reader = new FileReader();
+  reader.onload = function(e){
+    document.getElementById('geojsonInput').value = e.target.result;
+    alert('GeoJSON loaded into text area');
+  };
+  reader.readAsText(file);
+}
+document.getElementById('loadBtn').onclick = loadFileGeoJSON;
+</script>
 </head>
 <body>
 <div id="controls">
@@ -26,6 +38,8 @@
   <textarea id="geojsonInput" placeholder="Paste GeoJSON here..."></textarea>
 
   <button id="processBtn">Process GeoJSON</button>
+  <input type="file" id="fileInput" accept="application/geo+json,application/json,.geojson" />
+  <button id="loadBtn">Load GeoJSON</button>
   <button id="downloadBtn">Download Processed GeoJSON</button>
 
   <h3>Top Priority Areas</h3>
