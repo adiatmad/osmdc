@@ -1,649 +1,360 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>OSM Completeness Helper — Fixed + Modes + Auto-download</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"/>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OSM Completeness Helper — Priority System</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
 <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 <style>
-  body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
-  .legend i { display:inline-block; width:18px; height:18px; margin-right:8px; opacity:0.9; vertical-align:middle; }
-  table { border-collapse:collapse; width:100%; }
-  th, td { border:1px solid #ddd; padding:6px; font-size:0.9rem; text-align:left; }
-  th { background:#f7f7f7; font-weight:600; }
-  .chip { display:inline-block; padding:4px 8px; border-radius:999px; font-size:0.85rem; margin-right:6px; }
-  .loading { display:inline-block; width:18px; height:18px; border:3px solid #eee; border-top-color:#ef4444; border-radius:50%; animation:spin 1s linear infinite; vertical-align:middle; margin-left:8px; }
-  @keyframes spin { to { transform:rotate(360deg); } }
+  body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+  .chip{display:inline-block;padding:4px 8px;border-radius:999px;font-size:0.85rem;margin-right:6px}
+  table{border-collapse:collapse;width:100%}
+  th,td{border:1px solid #e5e7eb;padding:6px;font-size:13px;text-align:left}
+  th{background:#f9fafb}
+  .legend i{display:inline-block;width:18px;height:18px;margin-right:8px;vertical-align:middle}
+  .loading{display:inline-block;width:16px;height:16px;border:3px solid #eee;border-top-color:#ef4444;border-radius:50%;animation:spin 1s linear infinite;vertical-align:middle;margin-left:8px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .priority-1{background:#7f1d1d;color:white;padding:6px 8px;border-radius:6px}
+  .priority-2{background:#c026d3;color:white;padding:6px 8px;border-radius:6px}
+  .priority-3{background:#f97316;color:white;padding:6px 8px;border-radius:6px}
+  .priority-4{background:#facc15;color:#111;padding:6px 8px;border-radius:6px}
+  .priority-5{background:#10b981;color:white;padding:6px 8px;border-radius:6px}
 </style>
 </head>
 <body class="bg-gray-50 text-gray-900">
 <div class="max-w-6xl mx-auto p-6">
+  <h1 class="text-2xl font-bold text-red-800 mb-4">OSM Completeness Helper — Priority System</h1>
 
-  <h1 class="text-center text-3xl font-bold text-red-800 mb-6">OSM Completeness Helper — Modes & Auto-download</h1>
-
-  <!-- EXPLANATION PANEL -->
-  <div class="bg-yellow-50 border-l-4 border-yellow-500 p-4 rounded mb-6">
-    <h2 class="text-lg font-semibold">What this tool does (simple)</h2>
-    <p class="mt-2 text-sm">
-      This tool helps volunteers pick the **best areas to map buildings** so their limited time produces the largest real-world impact.
-      Two scores are calculated for each area:
-    </p>
-    <ul class="list-disc pl-6 mt-2 text-sm">
-      <li><strong>BWS (Building Workload Score)</strong> — estimated number of missing buildings in the area (how many building-drawing tasks).</li>
-      <li><strong>OPS (Operational Priority Score)</strong> — final priority combining BWS (70%) and population density (30%). Use OPS to choose where volunteers should focus now.</li>
+  <div class="bg-white rounded shadow p-4 mb-4">
+    <h2 class="font-semibold">What "priority" means (plain language)</h2>
+    <p class="text-sm mt-2">Each area gets a <strong>priority</strong> from <code>1 (Very High)</code> to <code>5 (Very Low)</code>. The priority is computed from:</p>
+    <ul class="list-disc pl-6 text-sm">
+      <li><strong>Estimated missing buildings</strong> — how many buildings are likely missing (area × baseline building density × unmapped %).</li>
+      <li><strong>Estimated population</strong> — either provided by the data, or estimated from population density × area.</li>
     </ul>
-    <p class="mt-2 text-sm">
-      <strong>Modes</strong>: choose how the "Process" action behaves:
-    </p>
-    <ol class="pl-6 list-decimal text-sm">
-      <li><strong>View Only</strong> — compute metrics, render map & table, <em>no file changes</em>.</li>
-      <li><strong>Singlepart Only</strong> — split multi-polygons into singlepart features (useful for some workflows), compute metrics, render map, <em>no auto-download</em>.</li>
-      <li><strong>Process + Download</strong> — split → compute metrics → auto-download processed GeoJSON file named <code>{input}_processed_{timestamp}.geojson</code>. (Optional auto-download toggle)</li>
-    </ol>
-    <p class="mt-2 text-xs opacity-80">Tip: Use View Only to inspect results first. Use Process + Download only when you're ready to export.</p>
+    <p class="text-sm mt-2">We multiply those two (missing × population) to get a raw impact score, then convert into priority groups (percentiles). This helps volunteers pick areas that maximize the number of people helped per mapper-hour.</p>
   </div>
 
-  <!-- UPLOAD & CONTROLS -->
-  <div class="bg-white rounded shadow p-4 mb-6">
+  <!-- Controls -->
+  <div class="bg-white rounded shadow p-4 mb-4">
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
       <div>
-        <h3 class="font-semibold mb-2">Upload / Paste GeoJSON</h3>
-        <div id="upload-container" class="border-2 border-dashed border-red-700 rounded p-3 text-center bg-white">
-          <p class="text-sm mb-2">Drag & drop a GeoJSON file here, or paste below</p>
-          <input id="file-input" type="file" accept=".geojson,.json" class="hidden"/>
-          <button id="file-select-btn" class="bg-red-700 text-white py-1 px-3 rounded mb-2">Choose file</button>
-          <textarea id="geojson-text" placeholder="Or paste GeoJSON here..." class="w-full h-28 p-2 border border-gray-200 rounded font-mono text-sm"></textarea>
+        <label class="font-semibold">Upload or paste GeoJSON</label>
+        <div id="upload" class="mt-2 border-2 border-dashed border-gray-200 p-3 rounded text-center">
+          <input id="file-input" type="file" accept=".geojson,.json" class="hidden" />
+          <button id="btn-file" class="bg-red-700 text-white px-3 py-1 rounded">Choose file</button>
+          <textarea id="geojson-text" placeholder="Or paste GeoJSON here" class="w-full h-28 mt-2 p-2 border rounded font-mono text-sm"></textarea>
         </div>
-        <div class="mt-3 flex gap-2">
-          <button id="split-btn" class="bg-blue-700 text-white py-2 px-3 rounded flex-1">Split → Singlepart</button>
-          <select id="process-mode" class="border p-2 rounded">
-            <option value="view">View Only</option>
-            <option value="singlepart">Singlepart Only</option>
-            <option value="process_download">Process + Download</option>
-          </select>
-        </div>
-        <div class="mt-2 flex gap-2">
-          <button id="process-btn" class="bg-red-700 text-white py-2 px-3 rounded flex-1" disabled>Process</button>
-          <label class="inline-flex items-center gap-2">
-            <input type="checkbox" id="auto-download" /> Auto-download (if mode = Process + Download)
-          </label>
-        </div>
-        <div class="mt-2 text-sm text-gray-600">
-          <span>Processed file button will be enabled after successful processing.</span>
+        <div class="flex gap-2 mt-3">
+          <button id="btn-split" class="bg-blue-600 text-white px-3 py-2 rounded">Split → Singlepart</button>
+          <button id="btn-process" class="bg-green-700 text-white px-3 py-2 rounded" disabled>Process (compute priority)</button>
         </div>
       </div>
 
       <div>
-        <h3 class="font-semibold mb-2">Map Controls</h3>
-        <label class="block text-sm mb-1">Color map by metric</label>
-        <select id="metric-selector" class="w-full p-2 border rounded mb-2"></select>
-        <div class="flex gap-2 mb-2">
-          <button id="top10-btn" class="bg-yellow-600 text-white py-1 px-2 rounded flex-1">Show Top 10 (OPS)</button>
-          <button id="toggle-high-btn" class="bg-indigo-600 text-white py-1 px-2 rounded flex-1">Toggle High OPS Only</button>
+        <label class="font-semibold">Options</label>
+        <div class="mt-2 text-sm">
+          <label class="inline-flex items-center gap-2"><input type="checkbox" id="use-baseline" checked/> Use baseline building density</label>
+          <div class="mt-2 text-xs text-gray-600">Baseline density (buildings/km²) <input id="baseline-density" type="number" value="300" class="border ml-2 p-1 w-24"/></div>
         </div>
-        <div class="text-sm text-gray-700">
+
+        <div class="mt-4">
+          <button id="btn-download" class="bg-indigo-700 text-white px-3 py-2 rounded w-full" disabled>Download Processed GeoJSON</button>
+          <button id="btn-csv" class="bg-indigo-500 text-white px-3 py-2 rounded w-full mt-2" disabled>Export Priority CSV</button>
+        </div>
+      </div>
+
+      <div>
+        <label class="font-semibold">Quick stats</label>
+        <div class="mt-2 text-sm">
           <div>Features: <span id="stat-features">0</span></div>
           <div>Processed: <span id="stat-processed">No</span></div>
         </div>
-      </div>
-
-      <div>
-        <h3 class="font-semibold mb-2">Export & Quick Actions</h3>
-        <button id="download-btn" class="bg-green-700 text-white py-2 px-3 rounded w-full" disabled>Download Processed GeoJSON</button>
-        <button id="export-csv" class="bg-green-600 text-white py-2 px-3 rounded w-full mt-2" disabled>Export CSV (priority list)</button>
-        <div class="mt-3 text-xs text-gray-600">
-          <strong>Note:</strong> If using Process + Download mode and Auto-download checked, the processed file will download automatically after processing.
+        <div class="mt-4">
+          <label class="font-semibold">Legend</label>
+          <div class="mt-2" id="legend-small">
+            <div><span class="chip priority-1">1 Very High</span></div>
+            <div class="mt-1"><span class="chip priority-2">2 High</span></div>
+            <div class="mt-1"><span class="chip priority-3">3 Medium</span></div>
+            <div class="mt-1"><span class="chip priority-4">4 Low</span></div>
+            <div class="mt-1"><span class="chip priority-5">5 Very Low</span></div>
+          </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- MAP & RIGHT PANEL -->
   <div class="flex gap-4">
     <div class="flex-1">
       <div id="map" class="h-[640px] rounded shadow"></div>
-      <div class="bg-white p-3 rounded mt-3 text-sm shadow">
-        <strong>Legend</strong>
-        <div id="legend" class="mt-2"></div>
-      </div>
     </div>
-
     <div class="w-96">
-      <div class="bg-white p-3 rounded shadow mb-3">
-        <h4 class="font-semibold">Top Priority (Live)</h4>
+      <div class="bg-white rounded shadow p-3 mb-3">
+        <h3 class="font-semibold">Top priorities</h3>
         <div id="toplist" class="mt-2 text-sm">No data yet.</div>
       </div>
-
-      <div class="bg-white p-3 rounded shadow">
-        <h4 class="font-semibold">GeoJSON Table</h4>
-        <div id="table-container" style="max-height:360px; overflow:auto; font-size:13px;">
-          Paste or upload GeoJSON and click Process to see table.
-        </div>
+      <div class="bg-white rounded shadow p-3">
+        <h3 class="font-semibold">Table (click row to zoom)</h3>
+        <div id="table" style="max-height:420px;overflow:auto;font-size:13px">No data yet.</div>
       </div>
     </div>
   </div>
 
-  <footer class="text-center mt-6 text-sm text-gray-600">
-    Built for mapping volunteers — BWS (Building Workload Score) & OPS (Operational Priority Score)
-  </footer>
+  <footer class="mt-6 text-xs text-gray-600">Priority computed as: estimated_missing_buildings × estimated_population, then converted to groups (1..5). See baseline density option to tune local conditions.</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script>
-/* ---------------------------
-   Globals & state
-   --------------------------- */
-let map, geoJsonLayer = null;
-let originalGeoJson = null;
-let processedGeoJson = null;
-let originalFileName = "geojson";
-let featureIdCounter = 0;
-let showHighOnly = false;
+let map, geoJsonLayer=null, originalGeoJson=null, processedGeoJson=null, featureIdCounter=0;
 
-/* ---------------------------
-   Utils
-   --------------------------- */
-function safeNum(x){ return (x===undefined||x===null||isNaN(Number(x)))?0:Number(x); }
-function nowTimestamp(){ const d=new Date(); return d.toISOString().replace(/[:.]/g,'-'); }
-function downloadBlob(filename, content){
-  const blob = new Blob([content], {type: "application/json"});
-  const url = URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url; a.download=filename;
-  document.body.appendChild(a); a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+function init(){
+  map = L.map('map').setView([2,117],5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM'}).addTo(map);
+  wireUI();
 }
 
-/* ---------------------------
-   Split multi → single (robust)
-   --------------------------- */
+function wireUI(){
+  document.getElementById('btn-file').addEventListener('click', ()=>document.getElementById('file-input').click());
+  document.getElementById('file-input').addEventListener('change', e=>handleFile(e.target.files[0]));
+  document.getElementById('btn-split').addEventListener('click', ()=>{
+    if(!originalGeoJson) tryLoadTextarea();
+    if(!originalGeoJson) return alert('No GeoJSON loaded');
+    processedGeoJson = splitGeoJSONToSinglepart(originalGeoJson);
+    document.getElementById('geojson-text').value = JSON.stringify(processedGeoJson,null,2);
+    document.getElementById('stat-features').textContent = processedGeoJson.features.length;
+    document.getElementById('btn-process').disabled = false;
+  });
+
+  document.getElementById('btn-process').addEventListener('click', async ()=>{
+    document.getElementById('btn-process').disabled = true;
+    const originalLabel = document.getElementById('btn-process').textContent;
+    document.getElementById('btn-process').innerHTML = 'Working <span class="loading"></span>';
+    try{
+      if(!originalGeoJson) tryLoadTextarea();
+      if(!originalGeoJson) throw new Error('No GeoJSON loaded');
+      // default: work on singlepart copy (safer)
+      processedGeoJson = splitGeoJSONToSinglepart(originalGeoJson);
+      computePriority(processedGeoJson);
+      renderAll(processedGeoJson);
+      document.getElementById('stat-processed').textContent = 'Yes';
+      document.getElementById('btn-download').disabled = false;
+      document.getElementById('btn-csv').disabled = false;
+    }catch(err){
+      console.error(err);
+      alert('Processing failed: '+err.message);
+    }finally{
+      document.getElementById('btn-process').disabled = false;
+      document.getElementById('btn-process').textContent = originalLabel;
+    }
+  });
+
+  document.getElementById('btn-download').addEventListener('click', ()=>{
+    if(!processedGeoJson) return alert('No processed data');
+    const name = (new Date()).toISOString().replace(/[:.]/g,'-');
+    const filename = `processed_priority_${name}.geojson`;
+    downloadFile(filename, JSON.stringify(processedGeoJson,null,2));
+  });
+
+  document.getElementById('btn-csv').addEventListener('click', ()=>{
+    if(!processedGeoJson) return alert('No processed data');
+    exportCSV(processedGeoJson);
+  });
+}
+
+function tryLoadTextarea(){
+  const txt = document.getElementById('geojson-text').value.trim();
+  if(!txt) return;
+  try{ originalGeoJson = JSON.parse(txt); }catch(e){ alert('Invalid JSON in textarea'); }
+}
+
+function handleFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{ originalGeoJson = JSON.parse(e.target.result); document.getElementById('geojson-text').value = JSON.stringify(originalGeoJson,null,2); document.getElementById('btn-process').disabled = false; document.getElementById('stat-features').textContent = (originalGeoJson.features||[]).length; }catch(err){ alert('Invalid GeoJSON'); }
+  };
+  reader.readAsText(file);
+}
+
 function splitGeoJSONToSinglepart(geojson){
   featureIdCounter = 0;
   if(!geojson) return null;
-  const features=[];
-  const addFeature = f=>{
+  const out = { type:'FeatureCollection', features:[] };
+  const add = f=>{
     if(!f.geometry) return;
     const t = f.geometry.type;
-    if(t === "MultiPolygon"){
+    if(t === 'MultiPolygon'){
       f.geometry.coordinates.forEach(coords=>{
-        features.push({ type:"Feature", properties: {...(f.properties||{})}, geometry: { type:"Polygon", coordinates: coords }, _fid: featureIdCounter++ });
+        out.features.push({ type:'Feature', properties: {...(f.properties||{})}, geometry: { type:'Polygon', coordinates: coords}, _fid: featureIdCounter++ });
       });
     } else {
-      features.push({...f, _fid: featureIdCounter++});
+      out.features.push({...f, _fid: featureIdCounter++});
     }
   };
-  if(geojson.type === "FeatureCollection"){
-    geojson.features.forEach(addFeature);
-  } else if(geojson.type === "Feature"){
-    addFeature(geojson);
-  } else {
-    // geometry-only
-    features.push({ type:"Feature", properties:{}, geometry:geojson, _fid: featureIdCounter++ });
-  }
-  return { type:"FeatureCollection", features };
+  if(geojson.type === 'FeatureCollection') geojson.features.forEach(add);
+  else if(geojson.type === 'Feature') add(geojson);
+  return out;
 }
 
-/* ---------------------------
-   Map init
-   --------------------------- */
-function initMap(){
-  map = L.map("map", { preferCanvas:true }).setView([2, 117], 5);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OSM contributors" }).addTo(map);
+// Priority computation
+function computePriority(fc){
+  if(!fc || !fc.features) throw new Error('Empty features');
+  const baseline = safeNum(Number(document.getElementById('baseline-density').value) || 300);
+  const useBaseline = document.getElementById('use-baseline').checked;
 
-  // initial legend
-  document.getElementById("legend").innerHTML = `<i style="background:#fb6a4a"></i>Low &nbsp;
-                                                 <i style="background:#ef3b2c"></i>Low-Med &nbsp;
-                                                 <i style="background:#cb181d"></i>Medium &nbsp;
-                                                 <i style="background:#a50f15"></i>Med-High &nbsp;
-                                                 <i style="background:#67000d"></i>High`;
-}
-
-/* ---------------------------
-   UI wiring
-   --------------------------- */
-function initUI(){
-  const fileBtn = document.getElementById("file-select-btn");
-  const fileInput = document.getElementById("file-input");
-  const geoText = document.getElementById("geojson-text");
-  const splitBtn = document.getElementById("split-btn");
-  const processBtn = document.getElementById("process-btn");
-  const processMode = document.getElementById("process-mode");
-  const downloadBtn = document.getElementById("download-btn");
-  const exportCsvBtn = document.getElementById("export-csv");
-  const metricSel = document.getElementById("metric-selector");
-  const top10Btn = document.getElementById("top10-btn");
-  const toggleHighBtn = document.getElementById("toggle-high-btn");
-
-  // file choose
-  fileBtn.addEventListener("click", ()=> fileInput.click());
-  fileInput.addEventListener("change", e=>{
-    const f = e.target.files[0];
-    if(!f) return;
-    originalFileName = f.name.replace(/\.[^/.]+$/,"");
-    const reader = new FileReader();
-    reader.onload = ev => {
-      try {
-        originalGeoJson = JSON.parse(ev.target.result);
-        geoText.value = JSON.stringify(originalGeoJson, null, 2);
-        document.getElementById("stat-features").textContent = (originalGeoJson.type==="FeatureCollection") ? originalGeoJson.features.length : 1;
-        processBtn.disabled = false;
-      } catch(err){
-        alert("Invalid JSON: " + err.message);
-        console.error(err);
-      }
-    };
-    reader.readAsText(f);
-  });
-
-  // paste text
-  geoText.addEventListener("input", ()=>{
-    processBtn.disabled = !geoText.value.trim().length;
-  });
-
-  // split singlepart (explicit)
-  splitBtn.addEventListener("click", ()=>{
-    try {
-      if(!originalGeoJson){
-        // try parse from textarea
-        originalGeoJson = JSON.parse(document.getElementById("geojson-text").value);
-      }
-      processedGeoJson = splitGeoJSONToSinglepart(originalGeoJson);
-      document.getElementById("geojson-text").value = JSON.stringify(processedGeoJson, null, 2);
-      document.getElementById("stat-features").textContent = processedGeoJson.features.length;
-      processBtn.disabled = false;
-      alert("Split to singlepart completed — now click Process (choose mode).");
-    } catch(err){
-      alert("Split failed: " + err.message);
-      console.error("Split error", err);
-    }
-  });
-
-  // process (core) — fixed to honor modes and robust error handling
-  processBtn.addEventListener("click", async ()=>{
-    processBtn.disabled = true;
-    const mode = processMode.value; // "view", "singlepart", "process_download"
-    const autoDownloadCheckbox = document.getElementById("auto-download");
-    const autoDownload = autoDownloadCheckbox.checked;
-
-    // show inline loading indicator
-    const originalLabel = processBtn.textContent;
-    processBtn.innerHTML = `Processing <span class="loading" aria-hidden="true"></span>`;
-
-    try {
-      // Ensure we have a GeoJSON object to work with
-      if(!originalGeoJson){
-        // try parse from textarea
-        const txt = document.getElementById("geojson-text").value;
-        if(!txt || !txt.trim()) throw new Error("No GeoJSON available (upload or paste first).");
-        originalGeoJson = JSON.parse(txt);
-      }
-
-      // Decide work-copy based on mode
-      if(mode === "view"){
-        // No splitting by default; keep original but work on a deep copy to avoid mutation
-        processedGeoJson = JSON.parse(JSON.stringify(originalGeoJson));
-      } else if(mode === "singlepart"){
-        // Split and stop (singlepart only)
-        processedGeoJson = splitGeoJSONToSinglepart(originalGeoJson);
-      } else if(mode === "process_download"){
-        // Split then process; if auto-download checked, will download
-        processedGeoJson = splitGeoJSONToSinglepart(originalGeoJson);
-      } else {
-        processedGeoJson = JSON.parse(JSON.stringify(originalGeoJson));
-      }
-
-      // If processedGeoJson is null, fail early
-      if(!processedGeoJson || !processedGeoJson.features) throw new Error("Processed GeoJSON is empty after split/prepare.");
-
-      // Run metric computation (BWS & OPS) — only for polygon features (best-effort)
-      await computeMetrics(processedGeoJson);
-
-      // Populate metric selector and default to ops_score
-      populateMetricSelector();
-
-      // Render Map & Table
-      updateMap(processedGeoJson);
-      updateTable(processedGeoJson);
-
-      // Update UI states
-      document.getElementById("stat-features").textContent = processedGeoJson.features.length;
-      document.getElementById("stat-processed").textContent = "Yes";
-      document.getElementById("download-btn").disabled = false;
-      document.getElementById("export-csv").disabled = false;
-
-      // If mode says download, and auto-download checked OR mode implies download, do it
-      if(mode === "process_download" && autoDownload){
-        const filename = `${originalFileName || "processed"}_processed_${nowTimestamp()}.geojson`;
-        downloadBlob(filename, JSON.stringify(processedGeoJson, null, 2));
-      }
-
-      // If mode is singlepart-only but user also wants auto-download and checked, allow download too
-      if(mode === "singlepart" && autoDownload){
-        const filename = `${originalFileName || "split"}_singlepart_${nowTimestamp()}.geojson`;
-        downloadBlob(filename, JSON.stringify(processedGeoJson, null, 2));
-      }
-
-    } catch(err){
-      alert("Processing failed: " + (err.message || err));
-      console.error("Process error:", err);
-    } finally {
-      processBtn.disabled = false;
-      processBtn.textContent = originalLabel;
-    }
-  });
-
-  // Download button (manual)
-  document.getElementById("download-btn").addEventListener("click", ()=>{
-    if(!processedGeoJson) return alert("No processed GeoJSON available yet.");
-    const filename = `${originalFileName || "processed"}_processed_${nowTimestamp()}.geojson`;
-    downloadBlob(filename, JSON.stringify(processedGeoJson, null, 2));
-  });
-
-  // Export CSV button
-  document.getElementById("export-csv").addEventListener("click", ()=>{
-    if(!processedGeoJson) return alert("No processed data.");
-    exportPriorityCSV();
-  });
-
-  // Top 10 and toggle high only
-  top10Btn.addEventListener("click", ()=> showTopList(10));
-  toggleHighBtn.addEventListener("click", ()=>{
-    showHighOnly = !showHighOnly;
-    toggleHighBtn.textContent = showHighOnly ? "Show All" : "Toggle High OPS Only";
-    if(processedGeoJson) updateMap(processedGeoJson);
-  });
-
-  // metric change
-  document.getElementById("metric-selector").addEventListener("change", ()=>{
-    if(processedGeoJson) updateMap(processedGeoJson);
-  });
-
-  // drag & drop file support on container
-  const uploadContainer = document.getElementById("upload-container");
-  uploadContainer.addEventListener("dragover", e=> { e.preventDefault(); uploadContainer.classList.add("bg-red-50"); });
-  uploadContainer.addEventListener("dragleave", e=> { e.preventDefault(); uploadContainer.classList.remove("bg-red-50"); });
-  uploadContainer.addEventListener("drop", e=> {
-    e.preventDefault();
-    uploadContainer.classList.remove("bg-red-50");
-    const f = e.dataTransfer.files[0];
-    if(f) {
-      originalFileName = f.name.replace(/\.[^/.]+$/,"");
-      const reader = new FileReader();
-      reader.onload = ev => {
-        try { originalGeoJson = JSON.parse(ev.target.result); document.getElementById("geojson-text").value = JSON.stringify(originalGeoJson, null, 2); processBtn.disabled = false; }
-        catch(err){ alert("Invalid JSON"); console.error(err); }
-      };
-      reader.readAsText(f);
-    }
-  });
-}
-
-/* ---------------------------
-   Metric computation: BWS & OPS
-   - BWS: estimated missing buildings = area_km2 * baseline_building_density * (building_unmapped_percent/100)
-   - OPS: 70% BWS normalized + 30% population_density normalized
-   --------------------------- */
-async function computeMetrics(fc){
-  // baseline building density (buildings/km2) — simple global estimate, can be refined
-  const baselineDensity = 300; // conservative global average
-  // gather arrays for normalization
-  const bwsArr = [];
-  const popDensityArr = [];
-
-  // first pass: ensure properties exist
-  for(const f of fc.features){
+  const rawScores = [];
+  fc.features.forEach(f=>{
     if(!f.properties) f.properties = {};
-    // ensure numeric fields exist (try to use existing properties else fallback)
+    // ensure area
     f.properties.area_km2 = safeNum(f.properties.area_km2 || estimateAreaKm2(f.geometry));
     f.properties.building_unmapped_percent = safeNum(f.properties.building_unmapped_percent || 0);
-    f.properties.population = safeNum(f.properties.population || 0);
-    f.properties.population_density = safeNum(f.properties.population_density || (f.properties.area_km2 > 0 ? f.properties.population / f.properties.area_km2 : 0));
-
-    // compute estimated missing buildings
-    const estMissing = f.properties.area_km2 * baselineDensity * (f.properties.building_unmapped_percent / 100);
-    f.properties.bws_estimated_missing = Math.round(estMissing);
-    bwsArr.push(f.properties.bws_estimated_missing);
-    popDensityArr.push(f.properties.population_density);
-  }
-
-  // compute normalization (min-max) for BWS and population density
-  const bwsMin = Math.min(...bwsArr), bwsMax = Math.max(...bwsArr);
-  const pdMin = Math.min(...popDensityArr), pdMax = Math.max(...popDensityArr);
-
-  // normalize and compute OPS
-  for(const f of fc.features){
-    const bwsVal = f.properties.bws_estimated_missing;
-    const pdVal = f.properties.population_density;
-    const bwsNorm = (bwsMax === bwsMin) ? 0.5 : (bwsVal - bwsMin) / (bwsMax - bwsMin);
-    const pdNorm = (pdMax === pdMin) ? 0.5 : (pdVal - pdMin) / (pdMax - pdMin);
-
-    const ops = (bwsNorm * 0.7 + pdNorm * 0.3) * 100;
-    f.properties.bws_score = Math.round(bwsNorm * 100); // 0-100 relative
-    f.properties.ops_score = Math.round(ops * 10) / 10; // 0-100, one decimal
-  }
-}
-
-/* ---------------------------
-   Helpers: estimate area if property missing (very rough bounding-box area)
-   --------------------------- */
-function estimateAreaKm2(geometry){
-  try {
-    if(!geometry) return 0;
-    // compute bounding box area as a fallback (rough)
-    const coords = getCoordsArray(geometry);
-    if(!coords || coords.length === 0) return 0;
-    let minLat=90, maxLat=-90, minLon=180, maxLon=-180;
-    coords.forEach(c=>{
-      const lon=c[0], lat=c[1];
-      if(lat < minLat) minLat = lat;
-      if(lat > maxLat) maxLat = lat;
-      if(lon < minLon) minLon = lon;
-      if(lon > maxLon) maxLon = lon;
-    });
-    const avgLat = (minLat+maxLat)/2;
-    const latDegKm = 111.32; // ~km per degree latitude
-    const lonDegKm = 111.32 * Math.cos(avgLat * Math.PI/180);
-    const widthKm = Math.max(0, (maxLon - minLon) * lonDegKm);
-    const heightKm = Math.max(0, (maxLat - minLat) * latDegKm);
-    const area = Math.max(0, widthKm * heightKm);
-    return Math.round(area*100)/100;
-  } catch(err){
-    console.error("estimateAreaKm2 error", err);
-    return 0;
-  }
-}
-function getCoordsArray(geometry){
-  if(!geometry) return [];
-  // supports Polygon (coordinates[0]) or MultiPolygon (coordinates[0][0])
-  if(geometry.type === "Polygon") return geometry.coordinates[0] || [];
-  if(geometry.type === "MultiPolygon") return geometry.coordinates[0][0] || [];
-  return [];
-}
-
-/* ---------------------------
-   Populate metric selector
-   --------------------------- */
-function populateMetricSelector(){
-  const sel = document.getElementById("metric-selector");
-  sel.innerHTML = "";
-  if(!processedGeoJson) return;
-  const keys = new Set();
-  processedGeoJson.features.forEach(f => Object.keys(f.properties || {}).forEach(k => keys.add(k)));
-  // prefer ops_score, bws_score, bws_estimated_missing
-  const preferred = ["ops_score","bws_score","bws_estimated_missing","population_density","population"];
-  const list = [...preferred.filter(k=>keys.has(k)), ...[...keys].filter(k=>!preferred.includes(k))];
-  list.forEach(k=>{
-    const o = document.createElement("option");
-    o.value = k; o.textContent = k.replace(/_/g," ");
-    sel.appendChild(o);
+    // estimated missing buildings
+    const density = useBaseline ? baseline : (safeNum(f.properties.building_density) || baseline);
+    const estMissing = f.properties.area_km2 * density * (f.properties.building_unmapped_percent/100);
+    f.properties.estimated_missing_buildings = Math.round(estMissing);
+    // estimated population: use provided population, else pop_density * area, else fallback 1
+    let pop = safeNum(f.properties.population);
+    if(!pop){
+      const pd = safeNum(f.properties.population_density);
+      if(pd > 0) pop = pd * f.properties.area_km2;
+    }
+    if(!pop) pop = 1; // small fallback to avoid zeroing
+    f.properties.estimated_population = Math.round(pop);
+    // raw priority score
+    const raw = f.properties.estimated_missing_buildings * f.properties.estimated_population;
+    f.properties._priority_raw = raw;
+    rawScores.push(raw);
   });
-  // default choose ops_score if available
-  if(keys.has("ops_score")) sel.value = "ops_score";
+
+  // convert to percentiles and buckets
+  rawScores.sort((a,b)=>a-b);
+  const n = rawScores.length;
+  fc.features.forEach(f=>{
+    const raw = f.properties._priority_raw || 0;
+    const idx = rawScores.indexOf(raw);
+    // percentile (0..1)
+    const p = (n <= 1) ? 0.5 : (idx / (n-1));
+    // assign group: top 10% -> 1, 10-30% ->2, 30-60%->3, 60-90%->4, rest->5
+    let priority = 5; let label = 'Very Low';
+    if(p >= 0.9) { priority = 1; label='Very High'; }
+    else if(p >= 0.7) { priority = 2; label='High'; }
+    else if(p >= 0.4) { priority = 3; label='Medium'; }
+    else if(p >= 0.1) { priority = 4; label='Low'; }
+    else { priority = 5; label='Very Low'; }
+
+    f.properties.priority = priority;
+    f.properties.priority_label = `${priority} - ${label}`;
+    // color hint for UI
+    f.properties.priority_color = priorityColor(priority);
+  });
 }
 
-/* ---------------------------
-   Map & legend update
-   --------------------------- */
-function updateMap(fc){
+function priorityColor(p){
+  switch(p){
+    case 1: return '#7f1d1d'; // very high (dark red)
+    case 2: return '#c026d3'; // high (magenta)
+    case 3: return '#f97316'; // medium (orange)
+    case 4: return '#facc15'; // low (yellow)
+    case 5: return '#10b981'; // very low (green)
+    default: return '#9ca3af';
+  }
+}
+
+function renderAll(fc){
   if(!fc) return;
+  // remove old
   if(geoJsonLayer) map.removeLayer(geoJsonLayer);
 
-  // build features to render (respect showHighOnly)
-  let featuresToRender = fc.features;
-  if(showHighOnly){
-    // show top 25% by ops_score
-    const arr = [...fc.features].map(f=>safeNum(f.properties.ops_score));
-    const cutoff = arr.sort((a,b)=>b-a)[Math.floor(arr.length*0.25)] || 0;
-    featuresToRender = fc.features.filter(f => safeNum(f.properties.ops_score) >= cutoff);
-  }
-
-  // compute min/max for current selected metric
-  const currentMetric = document.getElementById("metric-selector").value || "ops_score";
-  const vals = featuresToRender.map(f => safeNum(f.properties[currentMetric] ?? 0));
-  const minVal = vals.length ? Math.min(...vals) : 0;
-  const maxVal = vals.length ? Math.max(...vals) : 0;
-
-  const getColor = v => {
-    if(maxVal === minVal) return "#67000d";
-    const t = (v - minVal) / (maxVal - minVal);
-    if(t > 0.8) return "#67000d";
-    if(t > 0.6) return "#a50f15";
-    if(t > 0.4) return "#cb181d";
-    if(t > 0.2) return "#ef3b2c";
-    return "#fb6a4a";
-  };
-
-  geoJsonLayer = L.geoJSON({type:"FeatureCollection", features: featuresToRender}, {
-    style: f => {
-      const v = safeNum(f.properties[currentMetric] ?? 0);
-      return { color: getColor(v), weight: 2, fillOpacity: 0.6 };
-    },
-    onEachFeature: (feature, layer) => {
+  // draw with priority color
+  geoJsonLayer = L.geoJSON(fc, {
+    style: f=>({ color: f.properties.priority_color || '#9ca3af', weight:2, fillOpacity:0.6 }),
+    onEachFeature: (feature, layer)=>{
       const p = feature.properties || {};
-      const popupParts = [];
-      popupParts.push(`<strong>OPS:</strong> ${p.ops_score ?? ""}`);
-      popupParts.push(`<strong>BWS (missing buildings est):</strong> ${p.bws_estimated_missing ?? ""}`);
-      if(p.building_unmapped_percent !== undefined) popupParts.push(`<strong>Building unmapped %:</strong> ${p.building_unmapped_percent}`);
-      if(p.population !== undefined) popupParts.push(`<strong>Population:</strong> ${p.population}`);
-      if(p.population_density !== undefined) popupParts.push(`<strong>Pop density:</strong> ${Math.round(p.population_density*100)/100}`);
-      if(p.processing_error) popupParts.push(`<strong>Error:</strong> ${p.processing_error}`);
-      layer.bindPopup(popupParts.join("<br>"));
-
-      layer.on("mouseover", ()=> { layer.setStyle({ weight: 4, color: "red" }); const row = document.querySelector(`tr[data-fid='${feature._fid}']`); if(row) row.classList.add("highlight-row"); });
-      layer.on("mouseout", ()=> { layer.setStyle({ weight: 2 }); const row = document.querySelector(`tr[data-fid='${feature._fid}']`); if(row) row.classList.remove("highlight-row"); });
-      layer.on("click", ()=> { try { map.fitBounds(layer.getBounds()); } catch(e){} });
+      const lines = [];
+      lines.push(`<strong>Priority:</strong> ${p.priority_label || ''}`);
+      lines.push(`<strong>Est missing buildings:</strong> ${p.estimated_missing_buildings || 0}`);
+      lines.push(`<strong>Est population:</strong> ${p.estimated_population || 0}`);
+      if(p.building_unmapped_percent !== undefined) lines.push(`<strong>Unmapped %:</strong> ${p.building_unmapped_percent}`);
+      layer.bindPopup(lines.join('<br>'));
+      layer.on('click', ()=>{ try{ map.fitBounds(layer.getBounds()); }catch(e){} });
     }
   }).addTo(map);
 
-  try { if(geoJsonLayer && geoJsonLayer.getBounds && geoJsonLayer.getBounds().isValid()) map.fitBounds(geoJsonLayer.getBounds()); } catch(e){ console.warn(e); }
+  try{ if(geoJsonLayer.getBounds && geoJsonLayer.getBounds().isValid()) map.fitBounds(geoJsonLayer.getBounds()); }catch(e){}
 
-  // update legend counts
-  const counts = {Low:0, Medium:0, High:0};
-  const metric = document.getElementById("metric-selector").value || "ops_score";
-  // Create simple tertile classification for legend counts
-  const metricVals = fc.features.map(f => safeNum(f.properties[metric] ?? 0)).sort((a,b)=>a-b);
-  const t1 = metricVals[Math.floor(metricVals.length*0.33)] || metricVals[0] || 0;
-  const t2 = metricVals[Math.floor(metricVals.length*0.66)] || metricVals[metricVals.length-1] || 0;
-  fc.features.forEach(f => {
-    const v = safeNum(f.properties[metric] ?? 0);
-    const base = (v <= t1) ? "Low" : (v > t2 ? "High" : "Medium");
-    counts[base] = (counts[base] || 0) + 1;
-  });
-  document.getElementById("legend").innerHTML = `<span class="chip" style="background:#fb6a4a">Low (${counts.Low||0})</span>
-                                                <span class="chip" style="background:#cb181d">Medium (${counts.Medium||0})</span>
-                                                <span class="chip" style="background:#67000d">High (${counts.High||0})</span>`;
+  // update table & toplist
+  renderTable(fc);
+  renderTopList(fc, 10);
 }
 
-/* ---------------------------
-   Table
-   --------------------------- */
-function updateTable(fc){
-  const container = document.getElementById("table-container");
-  if(!fc || !fc.features || fc.features.length === 0){ container.innerHTML = "<p>No features to display.</p>"; return; }
-
-  const keys = new Set();
-  fc.features.forEach(f => Object.keys(f.properties || {}).forEach(k => keys.add(k)));
-  const cols = Array.from(keys);
-
-  let html = "<table><thead><tr>";
-  cols.forEach(c => html += `<th>${c}</th>`);
-  html += "</tr></thead><tbody>";
-
-  fc.features.forEach(f => {
-    html += `<tr data-fid="${f._fid}" style="cursor:pointer">`;
-    cols.forEach(c => html += `<td>${(f.properties && f.properties[c] !== undefined) ? f.properties[c] : ""}</td>`);
-    html += `</tr>`;
+function renderTable(fc){
+  const container = document.getElementById('table');
+  if(!fc || !fc.features || fc.features.length === 0){ container.innerHTML = '<p>No features</p>'; return; }
+  // columns: fid, priority_label, estimated_missing_buildings, estimated_population, building_unmapped_percent, area_km2
+  let html = '<table><thead><tr><th>fid</th><th>priority</th><th>missing_buildings</th><th>population</th><th>unmapped%</th><th>area_km2</th></tr></thead><tbody>';
+  fc.features.forEach(f=>{
+    const p = f.properties || {};
+    html += `<tr data-fid="${f._fid}"><td>${f._fid}</td><td>${p.priority_label||''}</td><td>${p.estimated_missing_buildings||0}</td><td>${p.estimated_population||0}</td><td>${p.building_unmapped_percent||0}</td><td>${p.area_km2||0}</td></tr>`;
   });
-
-  html += "</tbody></table>";
+  html += '</tbody></table>';
   container.innerHTML = html;
-
-  // attach click to rows to zoom to feature
-  container.querySelectorAll("tr[data-fid]").forEach(row=>{
-    row.addEventListener("click", e=>{
-      const fid = Number(row.getAttribute("data-fid"));
-      if(geoJsonLayer) geoJsonLayer.eachLayer(l => { if(l.feature._fid === fid) { try { map.fitBounds(l.getBounds()); } catch(e){} } });
-    });
-  });
+  // add click listeners to zoom
+  container.querySelectorAll('tr[data-fid]').forEach(r=> r.addEventListener('click', ()=>{
+    const fid = Number(r.getAttribute('data-fid'));
+    geoJsonLayer.eachLayer(l=>{ if(l.feature._fid === fid) try{ map.fitBounds(l.getBounds()); }catch(e){} });
+  }));
 }
 
-/* ---------------------------
-   Top list & CSV export
-   --------------------------- */
-function showTopList(n=10){
-  if(!processedGeoJson) return alert("No processed data.");
-  const arr = [...processedGeoJson.features].sort((a,b)=> safeNum(b.properties.ops_score) - safeNum(a.properties.ops_score));
+function renderTopList(fc, n=10){
+  const div = document.getElementById('toplist');
+  if(!fc) return; const arr = [...fc.features].sort((a,b)=> (b.properties._priority_raw||0) - (a.properties._priority_raw||0));
   const top = arr.slice(0,n);
-  const div = document.getElementById("toplist");
-  let html = "<ol class='list-decimal pl-5'>";
-  top.forEach(f => {
-    const name = f.properties.name || f.properties.admin_name || `fid:${f._fid}`;
-    html += `<li style="margin-bottom:6px; cursor:pointer" data-fid="${f._fid}"><strong>${name}</strong><div style="font-size:12px">OPS: ${f.properties.ops_score} • BWS est: ${f.properties.bws_estimated_missing}</div></li>`;
-  });
-  html += "</ol>";
+  let html = '<ol class="pl-4">';
+  top.forEach(f=>{ const p=f.properties; html += `<li style="margin-bottom:6px"><strong>${p.priority_label||''}</strong> — missing:${p.estimated_missing_buildings} pop:${p.estimated_population}</li>`; });
+  html += '</ol>';
   div.innerHTML = html;
-  div.querySelectorAll("[data-fid]").forEach(el => {
-    el.addEventListener("click", ()=> {
-      const fid = Number(el.getAttribute("data-fid"));
-      if(geoJsonLayer) geoJsonLayer.eachLayer(l => { if(l.feature._fid === fid) { try { map.fitBounds(l.getBounds()); } catch(e){} } });
-    });
-  });
 }
 
-function exportPriorityCSV(){
-  if(!processedGeoJson) return alert("No processed data.");
-  const rows = [["fid","name","ops_score","bws_estimated_missing","building_unmapped_percent","population","population_density","area_km2"]];
-  processedGeoJson.features.forEach(f => {
-    rows.push([
-      f._fid,
-      (f.properties.name || "").toString().replace(/"/g,'""'),
-      safeNum(f.properties.ops_score),
-      safeNum(f.properties.bws_estimated_missing),
-      safeNum(f.properties.building_unmapped_percent),
-      safeNum(f.properties.population),
-      safeNum(f.properties.population_density),
-      safeNum(f.properties.area_km2)
-    ]);
-  });
-  const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(",")).join("\n");
-  const a = document.createElement("a");
-  const blob = new Blob([csv], { type: "text/csv" });
+function downloadFile(name, content){
+  const blob = new Blob([content], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
-  a.href = url;
-  a.download = `${originalFileName || "priority"}_priority_${nowTimestamp()}.csv`;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-/* ---------------------------
-   Initialization
-   --------------------------- */
-document.addEventListener("DOMContentLoaded", ()=>{
-  initMap();
-  initUI();
+function exportCSV(fc){
+  const rows = [['fid','priority','priority_label','estimated_missing_buildings','estimated_population','building_unmapped_percent','area_km2']];
+  fc.features.forEach(f=>{ const p=f.properties||{}; rows.push([f._fid,p.priority||'',p.priority_label||'',p.estimated_missing_buildings||0,p.estimated_population||0,p.building_unmapped_percent||0,p.area_km2||0]); });
+  const csv = rows.map(r=> r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const name = `priority_list_${(new Date()).toISOString().replace(/[:.]/g,'-')}.csv`;
+  const blob = new Blob([csv], { type: 'text/csv' }); const url = URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+}
+
+// helpers
+function safeNum(x){ return (x===undefined||x===null||isNaN(Number(x)))?0:Number(x); }
+
+function estimateAreaKm2(geometry){
+  try{
+    if(!geometry) return 0;
+    const coords = (geometry.type==='Polygon') ? geometry.coordinates[0] : (geometry.type==='MultiPolygon' ? geometry.coordinates[0][0] : []);
+    if(!coords || coords.length===0) return 0;
+    let minLat=90,maxLat=-90,minLon=180,maxLon=-180;
+    coords.forEach(c=>{ const lon=c[0], lat=c[1]; if(lat<minLat) minLat=lat; if(lat>maxLat) maxLat=lat; if(lon<minLon) minLon=lon; if(lon>maxLon) maxLon=lon; });
+    const avgLat=(minLat+maxLat)/2; const latKm = 111.32; const lonKm = 111.32 * Math.cos(avgLat*Math.PI/180);
+    const width = Math.max(0, (maxLon-minLon)*lonKm); const height = Math.max(0,(maxLat-minLat)*latKm);
+    return Math.round(width*height*100)/100;
+  }catch(e){ return 0; }
+}
+
+// CSV/export buttons wiring
+document.addEventListener('click',(e)=>{
+  if(e.target && e.target.id === 'btn-csv'){
+    if(processedGeoJson) exportCSV(processedGeoJson);
+  }
 });
+
+// init
+init();
 </script>
 </body>
 </html>
