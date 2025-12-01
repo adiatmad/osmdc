@@ -1,123 +1,320 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Priority Mapping Tool</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <style>
-    body { margin: 0; font-family: sans-serif; }
-    #map { height: 100vh; width: 100%; }
-    .panel { position: absolute; top: 10px; left: 10px; z-index: 9999; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.2); }
-    .legend { position: absolute; bottom: 10px; left: 10px; z-index: 9999; background: white; padding: 10px; border-radius: 8px; }
-  </style>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>OSM Priority Areas — Volunteer Friendly</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" />
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+<style>
+  .legend i { display:inline-block; width:18px; height:18px; margin-right:8px; opacity:0.9 }
+  body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial }
+  .small { font-size:0.85rem }
+</style>
 </head>
-<body>
-  <div class="panel">
-    <input type="file" id="fileInput" accept="application/geo+json,.geojson,.json" />
-    <br><br>
-    <label><input type="checkbox" id="toggleTable" checked /> Show Table</label>
+<body class="bg-gray-100 text-gray-800">
+<div class="max-w-6xl mx-auto p-5">
+  <h1 class="text-center text-2xl md:text-3xl font-bold text-red-900 mb-6">OSM Priority Areas — Volunteer Friendly</h1>
+
+  <!-- Upload & Controls -->
+  <div class="bg-white p-4 rounded-lg shadow mb-4">
+    <div class="flex flex-col md:flex-row gap-4">
+      <div class="flex-1">
+        <label class="block font-medium mb-1">Upload GeoJSON (or paste)</label>
+        <div id="upload-container" class="border-2 border-dashed border-red-800 rounded-lg p-3 bg-white mb-2">
+          <input id="file-input" type="file" accept=".geojson,.json" class="hidden" />
+          <div class="flex items-center gap-2">
+            <button id="file-select-btn" class="bg-red-800 hover:bg-red-700 text-white px-3 py-2 rounded">Select file</button>
+            <button id="paste-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-2 rounded">Paste GeoJSON</button>
+            <span id="file-info" class="text-sm text-gray-600 ml-2">No file</span>
+          </div>
+          <textarea id="geojson-text" class="w-full mt-3 p-2 border rounded font-mono h-32" placeholder="Or paste GeoJSON here..."></textarea>
+          <p class="text-xs text-gray-500 mt-2">Ensure CRS is WGS84 (EPSG:4326). Large files may take a few seconds to process.</p>
+        </div>
+
+        <div class="flex items-center gap-3 mt-2">
+          <label class="inline-flex items-center gap-2">
+            <input id="explode-checkbox" type="checkbox" checked class="form-checkbox" />
+            <span class="small">Explode MultiPolygon → singlepart polygons</span>
+          </label>
+        </div>
+
+        <div class="mt-3 flex gap-2">
+          <button id="process-btn" class="bg-red-800 hover:bg-red-700 text-white px-4 py-2 rounded" disabled>Analyze</button>
+          <button id="download-all" class="bg-green-800 hover:bg-green-700 text-white px-4 py-2 rounded" disabled>Download All</button>
+          <button id="download-high" class="bg-yellow-700 hover:bg-yellow-600 text-white px-4 py-2 rounded" disabled>Download High Priority</button>
+          <div id="loader" class="ml-2 hidden flex items-center gap-2">
+            <svg class="animate-spin h-6 w-6 text-red-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+            </svg>
+            <span id="progress-text" class="text-sm text-gray-600">Processing...</span>
+          </div>
+        </div>
+
+        <div id="alerts" class="mt-3"></div>
+      </div>
+
+      <!-- Instructions & settings -->
+      <div class="w-80">
+        <div class="bg-gray-50 p-3 rounded">
+          <h3 class="font-semibold mb-2">Scoring (weighted)</h3>
+          <ul class="text-sm text-gray-700">
+            <li>Population: <strong>50%</strong></li>
+            <li>Building / OSM gap: <strong>50%</strong></li>
+          </ul>
+          <p class="text-xs text-gray-500 mt-2">Weights adjust automatically if one variable is missing. Classification uses quantiles (LOW / MEDIUM / HIGH).</p>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div id="map"></div>
-  <div class="legend" id="legend"></div>
+  <!-- Map + Table -->
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="md:col-span-2 bg-white p-3 rounded shadow">
+      <div id="map" class="h-[560px] rounded"></div>
+      <div id="legend" class="mt-2"></div>
+    </div>
+    <div class="bg-white p-3 rounded shadow">
+      <div class="flex items-center justify-between mb-2">
+        <h3 class="font-semibold">Areas (sortable)</h3>
+        <div>
+          <button id="filter-all" class="px-2 py-1 bg-gray-200 rounded small">All</button>
+          <button id="filter-high" class="px-2 py-1 bg-red-600 text-white rounded small">High</button>
+          <button id="filter-medium" class="px-2 py-1 bg-orange-400 text-white rounded small">Medium</button>
+          <button id="filter-low" class="px-2 py-1 bg-yellow-300 rounded small">Low</button>
+        </div>
+      </div>
+      <div id="table-container" class="text-sm overflow-auto" style="max-height:490px"></div>
+    </div>
+  </div>
 
+  <footer class="text-center mt-6 text-xs text-gray-600">Created for HOT / OSM workflows — Explode polygons, analyze population & mapping gaps efficiently.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <script>
-let map = L.map('map').setView([0, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
-
-let geoLayer;
-
-const priorityColors = {
-  low: '#66bb6a',
-  medium: '#ffa726',
-  high: '#ef5350'
-};
-
-function priorityCategory(score){
-  if(score >= 0.66) return 'high';
-  if(score >= 0.33) return 'medium';
-  return 'low';
+// ======= Utilities =======
+function showAlert(msg,type='info'){ const el=document.getElementById('alerts'); el.innerHTML=`<div class="p-2 rounded small ${type==='error'?'bg-red-200 text-red-800':'bg-yellow-50 text-yellow-800'}">${msg}</div>`;}
+function clearAlert(){document.getElementById('alerts').innerHTML='';}
+function uid(prefix='f'){return prefix+'_'+Math.random().toString(36).slice(2,9);}
+function makeFeatureCollection(features){ return {type:'FeatureCollection', features: features}; }
+function parseGeoJSON(text){ try{ return JSON.parse(text); } catch(e){ return null; } }
+function explodeToSinglePart(features){
+  const out=[];
+  features.forEach(f=>{
+    if(!f || !f.geometry) return;
+    if(f.geometry.type==='MultiPolygon'){
+      f.geometry.coordinates.forEach(coords=>{
+        out.push({type:'Feature', properties: {...f.properties}, geometry:{type:'Polygon',coordinates:coords}});
+      });
+    } else out.push(f);
+  });
+  return out;
 }
-
-function explodeMultipolygon(feature){
-  if(feature.geometry.type !== 'MultiPolygon') return [feature];
-  return feature.geometry.coordinates.map(poly => ({
-    type: 'Feature',
-    properties: { ...feature.properties },
-    geometry: { type: 'Polygon', coordinates: poly }
-  }));
+function normalizeArray(arr){
+  const nums=arr.map(x=>isFinite(x)?+x:NaN);
+  const valid=nums.filter(x=>!isNaN(x));
+  if(valid.length===0) return arr.map(_=>NaN);
+  const min=Math.min(...valid), max=Math.max(...valid);
+  if(min===max) return nums.map(x=>isNaN(x)?NaN:0.5);
+  return nums.map(x=>isNaN(x)?NaN:(x-min)/(max-min));
 }
-
-async function fetchDisasterNinjaData(lat, lon){
-  try{
-    const url = `https://disaster.ninja/api/v1/population?lat=${lat}&lon=${lon}`;
-    const res = await fetch(url);
-    if(!res.ok) return null;
-    return await res.json();
-  } catch{
-    return null;
-  }
+function quantileClass(arr){
+  const vals=arr.filter(v=>!isNaN(v)).slice().sort((a,b)=>a-b);
+  if(!vals.length) return arr.map(_=>null);
+  const q1=vals[Math.floor(vals.length/3)];
+  const q2=vals[Math.floor((2*vals.length)/3)];
+  return arr.map(v=> isNaN(v)?'LOW': v<=q1?'LOW':v<=q2?'MEDIUM':'HIGH');
 }
+function downloadBlob(obj,filename){
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+}
+function timestamp(){ return new Date().toISOString().replace(/[:.]/g,'-'); }
 
-document.getElementById('fileInput').addEventListener('change', async function(){
-  const file = this.files[0];
-  if(!file) return;
-  const text = await file.text();
-  const geojson = JSON.parse(text);
+// ======= Map =======
+let map=L.map('map').setView([5,20],3);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'&copy; OSM contributors'}).addTo(map);
+let geoLayer=null, currentFeatures=[], originalFilename='uploaded';
 
-  let features = [];
-  geojson.features.forEach(f => { features.push(...explodeMultipolygon(f)); });
-
-  let enriched = [];
-  for(const f of features){
-    const center = turf.centerOfMass(f).geometry.coordinates;
-    const [lon, lat] = center;
-    const data = await fetchDisasterNinjaData(lat, lon);
-
-    const pop = data?.population_density || 0;
-    const unmapped = data?.unmapped_buildings_pct || 0;
-
-    const score = (pop * 0.6) + ((unmapped/100) * 0.4);
-    const category = priorityCategory(score);
-
-    f.properties.pop_density = pop;
-    f.properties.unmapped_pct = unmapped;
-    f.properties.priority_score = score.toFixed(3);
-    f.properties.priority = category;
-
-    enriched.push(f);
-  }
-
-  if(geoLayer) map.removeLayer(geoLayer);
-  geoLayer = L.geoJSON(enriched,{
-    style: f => ({ color: priorityColors[f.properties.priority], weight: 1, fillOpacity: 0.5 }),
-    onEachFeature: (feature, layer) => {
-      layer.bindPopup(`
-        <b>Priority:</b> ${feature.properties.priority}<br>
-        <b>Score:</b> ${feature.properties.priority_score}<br>
-        <b>Pop density:</b> ${feature.properties.pop_density}<br>
-        <b>Unmapped buildings %:</b> ${feature.properties.unmapped_pct}
-      `);
+function styleByPriority(f){
+  const cls=f.properties?.priority_class;
+  const colors={'HIGH':'#8B0000','MEDIUM':'#FF8C00','LOW':'#FFD54D','UNKNOWN':'#CCCCCC'};
+  return {color:'#fff',weight:1,fillColor:colors[cls||'UNKNOWN'],fillOpacity:0.7};
+}
+function refreshMap(features){
+  if(geoLayer) geoLayer.remove();
+  geoLayer=L.geoJSON(makeFeatureCollection(features),{style: styleByPriority,
+    onEachFeature: (f,layer)=>{
+      const p=f.properties||{};
+      layer.bindPopup(`<div class="small"><strong>ID:</strong> ${p._id||''}<br>
+        <strong>Priority:</strong> ${p.priority_class||'N/A'}<br>
+        <strong>Score:</strong> ${p.priority_score!==undefined?p.priority_score.toFixed(2):'N/A'}<br>
+        <strong>Population:</strong> ${p.population||''}<br>
+        <strong>Unmapped%:</strong> ${p.osm_gaps_percent!==undefined?p.osm_gaps_percent:''}</div>`);
     }
   }).addTo(map);
+  try{ if(geoLayer.getBounds().isValid()) map.fitBounds(geoLayer.getBounds()); }catch(e){}
+  renderLegend();
+}
+function renderLegend(){
+  const el=document.getElementById('legend');
+  el.innerHTML=`<div class="legend bg-white p-2 rounded shadow small">
+    <i style="background:#8B0000"></i> High &nbsp;
+    <i style="background:#FF8C00; margin-left:10px"></i> Medium &nbsp;
+    <i style="background:#FFD54D; margin-left:10px"></i> Low
+  </div>`;
+}
 
-  map.fitBounds(geoLayer.getBounds());
+// ======= Core processing =======
+async function processFeatures(features){
+  clearAlert();
+  const loader=document.getElementById('loader'); loader.classList.remove('hidden');
+  const progressText=document.getElementById('progress-text');
 
-  updateLegend();
+  features.forEach((f,i)=>{ if(!f.properties) f.properties={}; f.properties._id=f.id||f.properties._id||uid('area'); });
+
+  for(let i=0;i<features.length;i++){
+    const f=features[i];
+    if(!f.geometry || !['Polygon','MultiPolygon'].includes(f.geometry.type)){
+      f.properties.processing_note='Skipped: not polygon';
+      continue;
+    }
+    try{
+      const res=await fetch('https://disaster.ninja/active/api/polygon_details',{
+        method:'POST', headers:{'Content-Type':'application/json','Accept':'application/json'},
+        body: JSON.stringify({type:'Feature',properties:{},geometry: f.geometry})
+      });
+      if(!res.ok) throw new Error('API '+res.status);
+      const data=await res.json();
+      data.forEach(item=>{
+        const key=(item.name||'').toLowerCase().replace(/\s+/g,'_');
+        if(item.name==='Population'){
+          const pop=(item.text||'').match(/([0-9,]+) people/);
+          const area=(item.text||'').match(/on ([0-9.]+) km2/);
+          f.properties.population=pop? parseInt(pop[1].replace(/,/g,'')) : (item.rawValue||0);
+          f.properties.area_km2=area? parseFloat(area[1]) : (item.area_km2||0);
+          f.properties.population_density=f.properties.area_km2>0? f.properties.population/f.properties.area_km2 : 0;
+        } else {
+          if(item.percentValue!==undefined) f.properties[`${key}_percent`]=item.percentValue;
+        }
+      });
+    }catch(err){
+      console.error('polygon error',err);
+      f.properties.processing_error=String(err);
+    }
+    progressText.textContent=`Processing polygon ${i+1}/${features.length}...`;
+    await new Promise(r=>setTimeout(r,250));
+  }
+
+  // Compute scoring
+  const popArr=features.map(f=>isFinite(f.properties.population)? +f.properties.population : NaN);
+  const buildArr=features.map(f=>{
+    const p=f.properties||{};
+    if(isFinite(p.osm_gaps_percent)) return +p.osm_gaps_percent;
+    if(isFinite(p.unmapped_buildings_percent)) return +p.unmapped_buildings_percent;
+    return NaN;
+  });
+  const popNorm=normalizeArray(popArr);
+  const buildNorm=normalizeArray(buildArr);
+  features.forEach((f,i)=>{
+    let score=0, contributed=0;
+    if(!isNaN(popNorm[i])){ score+=0.5*popNorm[i]; contributed+=0.5; }
+    if(!isNaN(buildNorm[i])){ score+=0.5*buildNorm[i]; contributed+=0.5; }
+    f.properties.priority_score=contributed? score/contributed : NaN;
+  });
+  const scores=features.map(f=>isFinite(f.properties.priority_score)? f.properties.priority_score : NaN);
+  const classes=quantileClass(scores);
+  features.forEach((f,i)=> f.properties.priority_class=classes[i]||'LOW');
+
+  loader.classList.add('hidden');
+  return features;
+}
+
+// ======= Table =======
+function renderTable(features){
+  const container=document.getElementById('table-container');
+  const header=`<div class="grid grid-cols-6 gap-2 font-semibold small p-2 border-b">
+    <div>ID</div><div>Area km²</div><div>Population</div><div>Unmapped%</div><div>Score</div><div>Priority</div>
+  </div>`;
+  let rows='';
+  features.forEach(f=>{
+    const p=f.properties||{};
+    rows+=`<div class="grid grid-cols-6 gap-2 items-center p-2 border-b small">
+      <div>${p._id||''}</div>
+      <div>${p.area_km2!==undefined?Number(p.area_km2).toFixed(2):''}</div>
+      <div>${p.population||''}</div>
+      <div>${p.osm_gaps_percent!==undefined?p.osm_gaps_percent:(p.unmapped_buildings_percent||'')}</div>
+      <div>${isFinite(p.priority_score)? p.priority_score.toFixed(2):''}</div>
+      <div><span class="px-2 py-0.5 rounded text-xs ${p.priority_class==='HIGH'?'bg-red-600 text-white':(p.priority_class==='MEDIUM'?'bg-orange-400 text-white':'bg-yellow-200 text-gray-800')}">${p.priority_class||''}</span></div>
+    </div>`;
+  });
+  container.innerHTML=header+rows;
+}
+
+// ======= UI =======
+const fileInput=document.getElementById('file-input');
+const fileSelectBtn=document.getElementById('file-select-btn');
+const pasteBtn=document.getElementById('paste-btn');
+const geojsonText=document.getElementById('geojson-text');
+const processBtn=document.getElementById('process-btn');
+const downloadAllBtn=document.getElementById('download-all');
+const downloadHighBtn=document.getElementById('download-high');
+
+fileSelectBtn.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{
+  const f=e.target.files[0]; if(!f) return;
+  originalFilename=f.name.replace(/\.[^/.]+$/,'');
+  document.getElementById('file-info').textContent=f.name+' ('+Math.round(f.size/1024)+' KB)';
+  const reader=new FileReader();
+  reader.onload=ev=>{ geojsonText.value=ev.target.result; processBtn.disabled=false; };
+  reader.readAsText(f);
+});
+pasteBtn.addEventListener('click',()=>geojsonText.focus());
+geojsonText.addEventListener('input',()=>{ processBtn.disabled=!geojsonText.value.trim().length; });
+
+processBtn.addEventListener('click', async ()=>{
+  clearAlert();
+  const txt=geojsonText.value.trim();
+  const parsed=parseGeoJSON(txt);
+  if(!parsed){ showAlert('Invalid GeoJSON','error'); return; }
+
+  let features=[];
+  if(parsed.type==='FeatureCollection') features=parsed.features.slice();
+  else if(parsed.type==='Feature') features=[parsed];
+  else if(['Polygon','MultiPolygon'].includes(parsed.type)) features=[{type:'Feature',properties:{},geometry:parsed}];
+  else { showAlert('Unsupported GeoJSON top-level type','error'); return; }
+
+  if(document.getElementById('explode-checkbox').checked) features=explodeToSinglePart(features);
+
+  currentFeatures=await processFeatures(features);
+  currentFeatures.sort((a,b)=>{'HIGH':3,'MEDIUM':2,'LOW':1}[b.properties.priority_class] - {'HIGH':3,'MEDIUM':2,'LOW':1}[a.properties.priority_class]);
+
+  refreshMap(currentFeatures);
+  renderTable(currentFeatures);
+
+  downloadAllBtn.disabled=false;
+  downloadHighBtn.disabled=false;
+  showAlert('Processing complete. Filter to focus on high-priority areas.', 'info');
 });
 
-function updateLegend(){
-  const legend = document.getElementById('legend');
-  legend.innerHTML = `
-    <b>Priority Legend</b><br>
-    <span style="background:${priorityColors.low};padding:3px 8px;border-radius:4px;">Low</span><br><br>
-    <span style="background:${priorityColors.medium};padding:3px 8px;border-radius:4px;">Medium</span><br><br>
-    <span style="background:${priorityColors.high};padding:3px 8px;border-radius:4px;">High</span>
-  `;
-}
+// Download buttons
+downloadAllBtn.addEventListener('click',()=>{ if(currentFeatures.length) downloadBlob(makeFeatureCollection(currentFeatures),originalFilename+'_'+timestamp()+'.geojson'); });
+downloadHighBtn.addEventListener('click',()=>{ 
+  const high=currentFeatures.filter(f=>f.properties.priority_class==='HIGH');
+  if(high.length) downloadBlob(makeFeatureCollection(high),originalFilename+'_HIGH_'+timestamp()+'.geojson'); 
+  else alert('No high-priority features found');
+});
+
+// Filters
+document.getElementById('filter-all').addEventListener('click',()=>{ refreshMap(currentFeatures); renderTable(currentFeatures); });
+document.getElementById('filter-high').addEventListener('click',()=>{ const f=currentFeatures.filter(x=>x.properties.priority_class==='HIGH'); refreshMap(f); renderTable(f); });
+document.getElementById('filter-medium').addEventListener('click',()=>{ const f=currentFeatures.filter(x=>x.properties.priority_class==='MEDIUM'); refreshMap(f); renderTable(f); });
+document.getElementById('filter-low').addEventListener('click',()=>{ const f=currentFeatures.filter(x=>x.properties.priority_class==='LOW'); refreshMap(f); renderTable(f); });
+
+document.addEventListener('DOMContentLoaded',()=>{ renderLegend(); });
 </script>
-<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
 </body>
 </html>
