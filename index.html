@@ -1,431 +1,64 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>OSM Priority Areas — Singlepart + Scoring</title>
-    <link
-      rel="stylesheet"
-      href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
-    />
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-    <style>
-      .legend i { display:inline-block; width:18px; height:18px; margin-right:8px; opacity:0.9 }
-      body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial }
-      .small { font-size:0.85rem }
-    </style>
-  </head>
-  <body class="bg-gray-100 text-gray-800">
-    <div class="max-w-6xl mx-auto p-5">
-      <h1 class="text-center text-2xl md:text-3xl font-bold text-red-900 mb-6">OSM Priority Areas — Singlepart + Scoring</h1>
+// Compute scoring (hazard ignored completely)
+if (enablePriority) {
 
-      <!-- Upload & Controls -->
-      <!-- Added new UI enhancements: scaling slider, toggle explainer, hazard toggle naming fixed -->
-      <div class="bg-white p-4 rounded-lg shadow mb-4">
-        <div class="flex flex-col md:flex-row gap-4">
-          <div class="flex-1">
-            <label class="block font-medium mb-1">Upload GeoJSON (or paste)</label>
-            <div id="upload-container" class="border-2 border-dashed border-red-800 rounded-lg p-3 bg-white mb-2">
-              <input id="file-input" type="file" accept=".geojson,.json" class="hidden" />
-              <div class="flex items-center gap-2">
-                <button id="file-select-btn" class="bg-red-800 hover:bg-red-700 text-white px-3 py-2 rounded">Select file</button>
-                <button id="paste-btn" class="bg-gray-200 hover:bg-gray-300 text-gray-800 px-3 py-2 rounded">Paste GeoJSON</button>
-                <span id="file-info" class="text-sm text-gray-600 ml-2">No file</span>
-              </div>
-              <textarea id="geojson-text" class="w-full mt-3 p-2 border rounded font-mono h-32" placeholder="Or paste GeoJSON here..."></textarea>
-              <p class="text-xs text-gray-500 mt-2">Make sure CRS is WGS84 (EPSG:4326). Large files or many parts may take long to process.</p>
-            </div>
+  // Extract numeric arrays
+  const popArr = features.map(f =>
+    (f.properties && isFinite(f.properties.population)) ? +f.properties.population : NaN
+  );
 
-            <div class="flex items-center gap-3">
-              <label class="inline-flex items-center gap-2">
-                <input id="explode-checkbox" type="checkbox" checked class="form-checkbox" />
-                <span class="small">Explode MultiPolygon → singlepart polygons (recommended)</span>
-              </label>
-              <label class="inline-flex items-center gap-2 ml-4">
-                <input id="enable-priority" type="checkbox" checked class="form-checkbox" />
-                <span class="small">Enable priority scoring (toggle)</span>
-              </label>
-            </div>
+  const buildArr = features.map(f => {
+    const p = f.properties || {};
+    if (isFinite(p.osm_gaps_percent)) return +p.osm_gaps_percent;
+    if (isFinite(p.unmapped_buildings_percent)) return +p.unmapped_buildings_percent;
+    if (isFinite(p.buildings_percent)) return +p.buildings_percent;
+    return NaN;
+  });
 
-            <div class="mt-3 flex gap-2">
-              <button id="process-btn" class="bg-red-800 hover:bg-red-700 text-white px-4 py-2 rounded" disabled>Analyze</button>
-              <button id="download-all" class="bg-green-800 hover:bg-green-700 text-white px-4 py-2 rounded" disabled>Download Processed GeoJSON</button>
-              <button id="download-high" class="bg-yellow-700 hover:bg-yellow-600 text-white px-4 py-2 rounded" disabled>Download High Priority Only</button>
-              <div id="loader" class="ml-2 hidden items-center"><svg class="animate-spin h-6 w-6 text-red-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path></svg><span class="ml-2 text-sm text-gray-600">Processing...</span></div>
-            </div>
+  // Normalize
+  const popNorm = normalizeArray(popArr);
+  const buildNorm = normalizeArray(buildArr);
 
-            <div id="alerts" class="mt-3"></div>
-          </div>
+  const hasPop = popNorm.some(v => !isNaN(v));
+  const hasBuild = buildNorm.some(v => !isNaN(v));
 
-          <!-- Simple instructions & settings -->
-          <div class="w-80">
-            <div class="bg-gray-50 p-3 rounded">
-              <h3 class="font-semibold mb-2">Scoring (fixed weights)</h3>
-              <ul class="text-sm text-gray-700">
-                <li>Population: <strong>50%</strong></li>
-                <li>Building / OSM gap: <strong>30%</strong></li>
-                <li>Hazard / Severity (if available): <strong>20%</strong></li>
-              </ul>
-              <p class="text-xs text-gray-500 mt-2">If a variable is missing the code rescales remaining weights to sum to 1. Classification uses quantiles (low / medium / high).</p>
+  // New weights — ONLY pop + building
+  // 0.5 population + 0.5 building
+  let w = { pop: 0.5, build: 0.5 };
 
-              <div class="mt-3">
-                <label class="block text-sm font-medium">Max polygons safe to process</label>
-                <select id="max-features" class="mt-1 p-2 border rounded w-full">
-                  <option value="50">50 (fast)</option>
-                  <option value="100" selected>100 (balanced)</option>
-                  <option value="250">250 (risky)</option>
-                </select>
-                <p class="text-xs text-gray-500 mt-1">If your upload has more features/parts than the selected value, you'll be warned before processing.</p>
-              </div>
+  if (!hasPop && !hasBuild) {
+    // no data at all
+    features.forEach(f => {
+      f.properties.priority_score = NaN;
+      f.properties.priority_class = 'LOW';
+    });
+  } else {
+    // Recalculate scores
+    features.forEach((f, i) => {
+      let score = 0;
+      let contributed = 0;
 
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Map + Table side-by-side -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div class="md:col-span-2 bg-white p-3 rounded shadow">
-          <div id="map" class="h-[560px] rounded"></div>
-          <div id="legend" class="mt-2"></div>
-        </div>
-        <div class="bg-white p-3 rounded shadow">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="font-semibold">Areas (sortable)</h3>
-            <div>
-              <button id="filter-all" class="px-2 py-1 bg-gray-200 rounded small">All</button>
-              <button id="filter-high" class="px-2 py-1 bg-red-600 text-white rounded small">High</button>
-              <button id="filter-medium" class="px-2 py-1 bg-orange-400 text-white rounded small">Medium</button>
-              <button id="filter-low" class="px-2 py-1 bg-yellow-300 rounded small">Low</button>
-            </div>
-          </div>
-          <div id="table-container" class="text-sm overflow-auto" style="max-height:490px"></div>
-        </div>
-      </div>
-
-      <footer class="text-center mt-6 text-xs text-gray-600">Created for HOT / OSM workflows — Explode before analysis, fixed scoring, simple UI.</footer>
-    </div>
-
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
-    <script>
-      // ======= Utilities =======
-      function showAlert(msg, type='info'){
-        const el = document.getElementById('alerts');
-        el.innerHTML = `<div class=\"p-2 rounded small ${type==='error'?'bg-red-200 text-red-800':'bg-yellow-50 text-yellow-800'}\">${msg}</div>`;
+      if (hasPop && !isNaN(popNorm[i])) {
+        score += w.pop * popNorm[i];
+        contributed += w.pop;
       }
 
-      function clearAlert(){ document.getElementById('alerts').innerHTML = '' }
-
-      function uid(prefix='f'){ return prefix + '_' + Math.random().toString(36).slice(2,9) }
-
-      // Explode MultiPolygon -> single Polygons (returns new feature list)
-      function explodeToSinglePart(features){
-        const out = [];
-        features.forEach(f => {
-          if(!f || !f.geometry) return;
-          if(f.geometry.type === 'MultiPolygon'){
-            const parts = f.geometry.coordinates;
-            parts.forEach(coords => {
-              out.push({ type: 'Feature', properties: Object.assign({}, f.properties || {}), geometry: { type: 'Polygon', coordinates: coords } });
-            });
-          } else {
-            out.push(f);
-          }
-        });
-        return out;
+      if (hasBuild && !isNaN(buildNorm[i])) {
+        score += w.build * buildNorm[i];
+        contributed += w.build;
       }
 
-      function makeFeatureCollection(features){ return { type:'FeatureCollection', features: features } }
+      if (contributed && contributed !== 1) score = score / contributed;
 
-      // Safe parsing
-      function parseGeoJSON(text){
-        try{ const j = JSON.parse(text); return j } catch(e){ return null }
-      }
+      f.properties.priority_score = isFinite(score) ? score : NaN;
+    });
 
-      // Normalize array of numbers to 0..1. If all equal, return 0.5 for all.
-      function normalizeArray(arr){
-        const nums = arr.map(x => (isFinite(x) ? +x : NaN));
-        const valid = nums.filter(x => !isNaN(x));
-        if(valid.length === 0) return arr.map(_=>NaN);
-        const min = Math.min(...valid); const max = Math.max(...valid);
-        if(min === max) return nums.map(x => isNaN(x)? NaN : 0.5);
-        return nums.map(x => isNaN(x)? NaN : (x - min) / (max - min));
-      }
-
-      // Quantile classification into 3 buckets 0..2
-      function quantileClass(scoreArr){
-        const vals = scoreArr.filter(v=>!isNaN(v)).slice().sort((a,b)=>a-b);
-        if(!vals.length) return scoreArr.map(_=>null);
-        const q1 = vals[Math.floor(vals.length/3)];
-        const q2 = vals[Math.floor((2*vals.length)/3)];
-        return scoreArr.map(v => {
-          if(isNaN(v)) return 'LOW';
-          if(v <= q1) return 'LOW';
-          if(v <= q2) return 'MEDIUM';
-          return 'HIGH';
-        });
-      }
-
-      // Create downloadable blob
-      function downloadBlob(obj, filename){
-        const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-      }
-
-      // ======= Setup map =======
-      let map = L.map('map').setView([5, 20], 3);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM contributors' }).addTo(map);
-      let geoLayer = null;
-      let currentFeatures = [];
-
-      function styleByPriority(f){
-        const cls = f.properties && f.properties.priority_class;
-        const colors = { 'HIGH':'#8B0000', 'MEDIUM':'#FF8C00', 'LOW':'#FFD54D', 'UNKNOWN':'#CCCCCC' };
-        return { color:'#fff', weight:1, fillColor: colors[cls||'UNKNOWN'], fillOpacity:0.7 }
-      }
-
-      function refreshMap(features){
-        if(geoLayer) geoLayer.remove();
-        const fc = makeFeatureCollection(features);
-        geoLayer = L.geoJSON(fc, {
-          style: styleByPriority,
-          onEachFeature: (f, layer) => {
-            const p = f.properties||{};
-            let html = `<div class=\"small\"><strong>ID:</strong> ${p._id || ''}<br>`;
-            html += `<strong>Priority:</strong> ${p.priority_class || 'N/A'}<br>`;
-            html += `<strong>Score:</strong> ${p.priority_score!==undefined? p.priority_score.toFixed(2): 'N/A'}<br>`;
-            html += `<strong>Population:</strong> ${p.population||''}<br>`;
-            html += `<strong>Unmapped%:</strong> ${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : p.unmapped_buildings_percent||''}</div>`;
-            layer.bindPopup(html);
-          }
-        }).addTo(map);
-        try{ if(geoLayer.getBounds().isValid()) map.fitBounds(geoLayer.getBounds()); }catch(e){}
-        renderLegend();
-      }
-
-      function renderLegend(){
-        const el = document.getElementById('legend');
-        el.innerHTML = `<div class=\"legend bg-white p-2 rounded shadow small\"><i style=\"background:#8B0000\"></i> High &nbsp; <i style=\"background:#FF8C00; margin-left:10px\"></i> Medium &nbsp; <i style=\"background:#FFD54D; margin-left:10px\"></i> Low</div>`;
-      }
-
-      // ======= Core processing =======
-      async function processFeatures(features){
-        // features is an array of GeoJSON Features (singlepart ideally)
-        clearAlert();
-        document.getElementById('loader').classList.remove('hidden');
-        const enablePriority = document.getElementById('enable-priority').checked;
-
-        // Ensure each feature has an _id
-        features.forEach((f,i)=>{ if(!f.properties) f.properties = {}; f.properties._id = f.id || f.properties._id || uid('area'); });
-
-        // For each polygon, call Disaster Ninja polygon_details (sequentially, to avoid rate limits)
-        for(let i=0;i<features.length;i++){
-          const f = features[i];
-          // Skip if not polygon/multipolygon
-          const gtype = f.geometry && f.geometry.type;
-          if(!gtype || !['Polygon','MultiPolygon'].includes(gtype)){
-            f.properties.processing_note = 'Skipped: not polygon';
-            continue;
-          }
-          // Call API
-          try{
-            const res = await fetch('https://disaster.ninja/active/api/polygon_details', {
-              method:'POST', headers:{ 'Content-Type':'application/json', Accept:'application/json' },
-              body: JSON.stringify({ type:'Feature', properties:{}, geometry: f.geometry })
-            });
-            if(!res.ok) throw new Error('API '+res.status);
-            const data = await res.json();
-            // Map returned items into properties
-            data.forEach(item=>{
-              const key = (item.name||'').toLowerCase().replace(/\s+/g,'_');
-              if(item.name === 'Population'){
-                const pop = (item.text||'').match(/([0-9,]+) people/);
-                const area = (item.text||'').match(/on ([0-9.]+) km2/);
-                f.properties.population = pop? parseInt(pop[1].replace(/,/g,'')) : (item.rawValue || 0);
-                f.properties.area_km2 = area? parseFloat(area[1]) : (item.area_km2 || 0);
-                f.properties.population_density = f.properties.area_km2 > 0 ? f.properties.population / f.properties.area_km2 : (item.density || 0);
-              } else {
-                // prefer percent values
-                if(item.percentValue !== undefined) f.properties[`${key}_percent`] = item.percentValue;
-                if(item.value !== undefined) f.properties[key+'_value'] = item.value;
-              }
-            });
-          } catch(err){
-            console.error('polygon error', err);
-            f.properties.processing_error = String(err);
-          }
-          // small delay to be polite to API
-          await new Promise(r=>setTimeout(r, 250));
-        }
-
-        // Compute scoring
-        if(enablePriority){
-          // Extract numeric arrays
-          const popArr = features.map(f=> (f.properties && isFinite(f.properties.population))? +f.properties.population : NaN);
-          // For building / mapping gap, try osm_gaps_percent then unmapped_buildings_percent
-          const buildArr = features.map(f=>{
-            const p = f.properties || {};
-            if(isFinite(p.osm_gaps_percent)) return +p.osm_gaps_percent;
-            if(isFinite(p.unmapped_buildings_percent)) return +p.unmapped_buildings_percent;
-            if(isFinite(p.buildings_percent)) return +p.buildings_percent; // fallback
-            return NaN;
-          });
-          // hazard severity if present (look for hazard_percent or hazard_value)
-          const hazardArr = features.map(f=>{
-            const p = f.properties || {};
-            if(isFinite(p.hazard_percent)) return +p.hazard_percent;
-            if(isFinite(p.flood_percent)) return +p.flood_percent;
-            if(isFinite(p.flood_depth)) return +p.flood_depth;
-            return NaN;
-          });
-
-          // Normalize
-          const popNorm = normalizeArray(popArr);
-          const buildNorm = normalizeArray(buildArr);
-          const hazardNorm = normalizeArray(hazardArr);
-
-          // Determine weights depending on availability
-          const hasPop = popNorm.some(v=>!isNaN(v));
-          const hasBuild = buildNorm.some(v=>!isNaN(v));
-          const hasHaz = hazardNorm.some(v=>!isNaN(v));
-
-          // Default recommended weights (from design): pop 0.5, build 0.3, hazard 0.2
-          let w = { pop:0.5, build:0.3, hazard:0.2 };
-          // If some variables missing, rescale remaining weights to sum 1
-          const present = [];
-          if(hasPop) present.push('pop');
-          if(hasBuild) present.push('build');
-          if(hasHaz) present.push('hazard');
-          if(present.length === 0){
-            // no data — set scores to NaN
-            features.forEach(f=>{ f.properties.priority_score = NaN; f.properties.priority_class = 'LOW'; });
-          } else {
-            const totalRaw = present.reduce((s,k)=> s + w[k], 0);
-            present.forEach(k=> w[k] = w[k] / totalRaw);
-
-            // compute weighted score
-            features.forEach((f,i)=>{
-              let score = 0; let contributed = 0;
-              if(hasPop && !isNaN(popNorm[i])){ score += w.pop * popNorm[i]; contributed += w.pop; }
-              if(hasBuild && !isNaN(buildNorm[i])){ score += w.build * buildNorm[i]; contributed += w.build; }
-              if(hasHaz && !isNaN(hazardNorm[i])){ score += w.hazard * hazardNorm[i]; contributed += w.hazard; }
-              // if some parts missing for a feature, rescale its contribution
-              if(contributed && contributed !== 1) score = score / contributed; // scale to 0..1
-              f.properties.priority_score = isFinite(score)? score : NaN;
-            });
-
-            // classify by quantiles
-            const scores = features.map(f=> isFinite(f.properties.priority_score)? f.properties.priority_score : NaN);
-            const classes = quantileClass(scores);
-            features.forEach((f,i)=>{ f.properties.priority_class = classes[i] || 'LOW' });
-          }
-        }
-
-        document.getElementById('loader').classList.add('hidden');
-        return features;
-      }
-
-      // ======= Table rendering and filters =======
-      function renderTable(features){
-        const container = document.getElementById('table-container');
-        // Build rows
-        const header = `<div class=\"grid grid-cols-6 gap-2 font-semibold small p-2 border-b\"><div>ID</div><div>Area km²</div><div>Population</div><div>Unmapped%</div><div>Score</div><div>Priority</div></div>`;
-        let rows = '';
-        features.forEach(f=>{
-          const p = f.properties || {};
-          rows += `<div class=\"grid grid-cols-6 gap-2 items-center p-2 border-b small\"><div>${p._id||''}</div><div>${p.area_km2!==undefined? (Number(p.area_km2).toFixed(2)) : ''}</div><div>${p.population||''}</div><div>${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : (p.unmapped_buildings_percent||'')}</div><div>${isFinite(p.priority_score)? p.priority_score.toFixed(2) : ''}</div><div><span class=\"px-2 py-0.5 rounded text-xs ${p.priority_class==='HIGH'?'bg-red-600 text-white':' '+(p.priority_class==='MEDIUM'?'bg-orange-400 text-white':'bg-yellow-200 text-gray-800')}\">${p.priority_class||''}</span></div></div>`;
-        });
-        container.innerHTML = header + rows;
-      }
-
-      // ======= Wire up UI =======
-      const fileInput = document.getElementById('file-input');
-      const fileSelectBtn = document.getElementById('file-select-btn');
-      const pasteBtn = document.getElementById('paste-btn');
-      const geojsonText = document.getElementById('geojson-text');
-      const processBtn = document.getElementById('process-btn');
-      const downloadAllBtn = document.getElementById('download-all');
-      const downloadHighBtn = document.getElementById('download-high');
-      const maxSelect = document.getElementById('max-features');
-
-      fileSelectBtn.addEventListener('click', ()=> fileInput.click());
-      fileInput.addEventListener('change', (e)=>{
-        const f = e.target.files[0];
-        if(!f) return;
-        document.getElementById('file-info').textContent = f.name + ' (' + Math.round(f.size/1024) + ' KB)';
-        const reader = new FileReader();
-        reader.onload = (ev)=>{ geojsonText.value = ev.target.result; processBtn.disabled = false; };
-        reader.readAsText(f);
-      });
-
-      pasteBtn.addEventListener('click', ()=>{ geojsonText.focus(); });
-      geojsonText.addEventListener('input', ()=>{ processBtn.disabled = !geojsonText.value.trim().length });
-
-      processBtn.addEventListener('click', async ()=>{
-        clearAlert();
-        const txt = geojsonText.value.trim();
-        const parsed = parseGeoJSON(txt);
-        if(!parsed){ showAlert('Invalid GeoJSON', 'error'); return; }
-
-        // Convert various geometry inputs to features
-        let features = [];
-        if(parsed.type === 'FeatureCollection') features = parsed.features.slice();
-        else if(parsed.type === 'Feature') features = [parsed];
-        else if(['Polygon','MultiPolygon'].includes(parsed.type)) features = [{ type:'Feature', properties:{}, geometry: parsed }];
-        else { showAlert('Unsupported GeoJSON top-level type', 'error'); return; }
-
-        // Explode if checked
-        if(document.getElementById('explode-checkbox').checked){
-          features = explodeToSinglePart(features);
-        }
-
-        // Sanity check count
-        const maxAllowed = parseInt(maxSelect.value,10);
-        if(features.length > maxAllowed){
-          if(!confirm('Your upload contains ' + features.length + ' singlepart features which exceeds the selected limit of ' + maxAllowed + '. Processing may take long and hit API limits. Continue?')){
-            return;
-          }
-        }
-
-        // Do processing
-        const processed = await processFeatures(features);
-        currentFeatures = processed.slice();
-
-        // Render
-        refreshMap(currentFeatures);
-        // Default sort: HIGH -> MEDIUM -> LOW
-        currentFeatures.sort((a,b)=>{
-          const rank = { 'HIGH':3,'MEDIUM':2,'LOW':1 };
-          return (rank[b.properties.priority_class]||0) - (rank[a.properties.priority_class]||0);
-        });
-        renderTable(currentFeatures);
-
-        downloadAllBtn.disabled = false;
-        downloadHighBtn.disabled = false;
-        showAlert('Processing complete. Use the filter buttons to focus high-priority areas.');
-      });
-
-      // Downloads
-      downloadAllBtn.addEventListener('click', ()=>{
-        if(!currentFeatures.length) return alert('No processed data');
-        downloadBlob(makeFeatureCollection(currentFeatures), 'processed_priority.geojson');
-      });
-      downloadHighBtn.addEventListener('click', ()=>{
-        if(!currentFeatures.length) return alert('No processed data');
-        const high = currentFeatures.filter(f=> (f.properties && f.properties.priority_class==='HIGH'));
-        if(!high.length) return alert('No high-priority features found');
-        downloadBlob(makeFeatureCollection(high), 'high_priority_areas.geojson');
-      });
-
-      // Filters
-      document.getElementById('filter-all').addEventListener('click', ()=>{ refreshMap(currentFeatures); renderTable(currentFeatures) });
-      document.getElementById('filter-high').addEventListener('click', ()=>{ const f = currentFeatures.filter(x=>x.properties.priority_class==='HIGH'); refreshMap(f); renderTable(f); });
-      document.getElementById('filter-medium').addEventListener('click', ()=>{ const f = currentFeatures.filter(x=>x.properties.priority_class==='MEDIUM'); refreshMap(f); renderTable(f); });
-      document.getElementById('filter-low').addEventListener('click', ()=>{ const f = currentFeatures.filter(x=>x.properties.priority_class==='LOW'); refreshMap(f); renderTable(f); });
-
-      // Init small hint
-      document.addEventListener('DOMContentLoaded', ()=>{ renderLegend(); });
-    </script>
-  </body>
-</html>
+    // Classify
+    const scores = features.map(f =>
+      isFinite(f.properties.priority_score) ? f.properties.priority_score : NaN
+    );
+    const classes = quantileClass(scores);
+    features.forEach((f, i) => {
+      f.properties.priority_class = classes[i] || 'LOW';
+    });
+  }
+}
