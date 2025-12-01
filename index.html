@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>OSM Priority Areas — Singlepart + Scoring</title>
+  <title>OSM Priority Areas — Population Density Scoring</title>
   <link
     rel="stylesheet"
     href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css"
@@ -13,15 +13,19 @@
     .legend i { display:inline-block; width:18px; height:18px; margin-right:8px; opacity:0.9 }
     body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial }
     .small { font-size:0.85rem }
+    .slider-container { @apply mt-2 p-3 bg-gray-50 rounded }
+    .slider-label { @apply block text-sm font-medium mb-1 }
+    .slider-value { @apply text-xs text-gray-600 ml-2 }
+    .score-weight { @apply inline-block w-6 text-center text-sm font-semibold }
   </style>
 </head>
 <body class="bg-gray-100 text-gray-800">
-<div class="max-w-6xl mx-auto p-5">
-  <h1 class="text-center text-2xl md:text-3xl font-bold text-red-900 mb-6">OSM Priority Areas — Singlepart + Scoring</h1>
+<div class="max-w-7xl mx-auto p-5">
+  <h1 class="text-center text-2xl md:text-3xl font-bold text-red-900 mb-6">OSM Priority Areas — Population Density Scoring</h1>
 
   <!-- Upload & Controls -->
   <div class="bg-white p-4 rounded-lg shadow mb-4">
-    <div class="flex flex-col md:flex-row gap-4">
+    <div class="flex flex-col md:flex-row gap-6">
       <div class="flex-1">
         <label class="block font-medium mb-1">Upload GeoJSON (or paste)</label>
         <div id="upload-container" class="border-2 border-dashed border-red-800 rounded-lg p-3 bg-white mb-2">
@@ -32,47 +36,135 @@
             <span id="file-info" class="text-sm text-gray-600 ml-2">No file</span>
           </div>
           <textarea id="geojson-text" class="w-full mt-3 p-2 border rounded font-mono h-32" placeholder="Or paste GeoJSON here..."></textarea>
-          <p class="text-xs text-gray-500 mt-2">Make sure CRS is WGS84 (EPSG:4326). Large files or many parts may take long to process.</p>
+          <p class="text-xs text-gray-500 mt-2">Make sure CRS is WGS84 (EPSG:4326). Large files may take time to process.</p>
         </div>
 
-        <div class="flex items-center gap-3">
+        <div class="flex items-center gap-3 mb-4">
           <label class="inline-flex items-center gap-2">
             <input id="explode-checkbox" type="checkbox" checked class="form-checkbox" />
-            <span class="small">Explode MultiPolygon → singlepart polygons (recommended)</span>
+            <span class="small">Explode MultiPolygon → singlepart polygons</span>
           </label>
           <label class="inline-flex items-center gap-2 ml-4">
             <input id="enable-priority" type="checkbox" checked class="form-checkbox" />
-            <span class="small">Enable priority scoring (Disaster Ninja only)</span>
+            <span class="small">Enable priority scoring</span>
           </label>
         </div>
 
-        <div class="mt-3 flex gap-2">
+        <!-- Scoring Configuration -->
+        <div class="slider-container">
+          <h3 class="font-semibold mb-3">Scoring Weights (adjustable)</h3>
+          
+          <div class="space-y-4">
+            <!-- Population Density Weight -->
+            <div>
+              <label class="slider-label">
+                Population Density (people/km²): 
+                <span id="density-weight-value" class="score-weight">40</span>%
+              </label>
+              <div class="flex items-center">
+                <input id="density-weight" type="range" min="0" max="100" value="40" class="flex-1 h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+                <span id="density-desc" class="text-xs text-gray-600 ml-3 w-32">Higher density = higher priority</span>
+              </div>
+            </div>
+
+            <!-- Building Gap Weight -->
+            <div>
+              <label class="slider-label">
+                OSM Building Gap (% unmapped): 
+                <span id="gap-weight-value" class="score-weight">40</span>%
+              </label>
+              <div class="flex items-center">
+                <input id="gap-weight" type="range" min="0" max="100" value="40" class="flex-1 h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+                <span id="gap-desc" class="text-xs text-gray-600 ml-3 w-32">Higher gap = higher priority</span>
+              </div>
+            </div>
+
+            <!-- Total Population Weight -->
+            <div>
+              <label class="slider-label">
+                Total Population (absolute): 
+                <span id="totalpop-weight-value" class="score-weight">20</span>%
+              </label>
+              <div class="flex items-center">
+                <input id="totalpop-weight" type="range" min="0" max="100" value="20" class="flex-1 h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+                <span id="totalpop-desc" class="text-xs text-gray-600 ml-3 w-32">Larger populations = higher priority</span>
+              </div>
+            </div>
+
+            <!-- Density Threshold -->
+            <div class="pt-2 border-t">
+              <label class="slider-label">
+                High Density Threshold: 
+                <span id="density-threshold-value" class="font-semibold">1000</span> people/km²
+              </label>
+              <div class="flex items-center">
+                <input id="density-threshold" type="range" min="100" max="5000" step="100" value="1000" class="flex-1 h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer">
+                <span class="text-xs text-gray-600 ml-3">Areas above this are considered high density</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-3 p-2 bg-blue-50 rounded">
+            <p class="text-xs text-blue-800">
+              <strong>Scoring logic:</strong> Population density now replaces raw population count. 
+              This prioritizes densely populated areas regardless of total size. 
+              Total population remains as a secondary factor.
+            </p>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="mt-4 flex gap-2">
           <button id="process-btn" class="bg-red-800 hover:bg-red-700 text-white px-4 py-2 rounded" disabled>Analyze</button>
           <button id="download-all" class="bg-green-800 hover:bg-green-700 text-white px-4 py-2 rounded" disabled>Download Processed GeoJSON</button>
           <button id="download-high" class="bg-yellow-700 hover:bg-yellow-600 text-white px-4 py-2 rounded" disabled>Download High Priority Only</button>
-          <div id="loader" class="ml-2 hidden items-center"><svg class="animate-spin h-6 w-6 text-red-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path></svg><span class="ml-2 text-sm text-gray-600">Processing...</span></div>
+          <div id="loader" class="ml-2 hidden items-center">
+            <svg class="animate-spin h-6 w-6 text-red-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a8 8 0 00-8 8z"></path>
+            </svg>
+            <span class="ml-2 text-sm text-gray-600">Processing...</span>
+          </div>
         </div>
 
         <div id="alerts" class="mt-3"></div>
       </div>
 
       <div class="w-80">
-        <div class="bg-gray-50 p-3 rounded">
-          <h3 class="font-semibold mb-2">Scoring (fixed weights)</h3>
-          <ul class="text-sm text-gray-700">
-            <li>Population: <strong>50%</strong></li>
-            <li>Building / OSM gap: <strong>50%</strong></li>
-          </ul>
-          <p class="text-xs text-gray-500 mt-2">If a variable is missing, remaining weight is rescaled to 1. Classification uses quantiles (low / medium / high).</p>
-
-          <div class="mt-3">
-            <label class="block text-sm font-medium">Max polygons safe to process</label>
+        <div class="bg-gray-50 p-3 rounded mb-4">
+          <h3 class="font-semibold mb-2">Processing Options</h3>
+          <div class="mb-3">
+            <label class="block text-sm font-medium mb-1">Max polygons safe to process</label>
             <select id="max-features" class="mt-1 p-2 border rounded w-full">
               <option value="50">50 (fast)</option>
               <option value="100" selected>100 (balanced)</option>
               <option value="250">250 (risky)</option>
             </select>
-            <p class="text-xs text-gray-500 mt-1">If your upload has more features/parts than the selected value, you'll be warned before processing.</p>
+            <p class="text-xs text-gray-500 mt-1">Warns if your upload exceeds this limit.</p>
+          </div>
+          
+          <div class="mt-4">
+            <h4 class="font-medium text-sm mb-2">Statistics Preview</h4>
+            <div id="stats-preview" class="text-xs text-gray-600 space-y-1">
+              <div>Features: <span id="stat-count" class="font-semibold">0</span></div>
+              <div>With density data: <span id="stat-density" class="font-semibold">0</span></div>
+              <div>Avg. density: <span id="stat-avg-density" class="font-semibold">-</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-gray-50 p-3 rounded">
+          <h3 class="font-semibold mb-2">Legend</h3>
+          <div class="space-y-1 text-sm">
+            <div class="flex items-center"><div class="w-4 h-4 bg-red-600 mr-2"></div><span>High Priority</span></div>
+            <div class="flex items-center"><div class="w-4 h-4 bg-orange-400 mr-2"></div><span>Medium Priority</span></div>
+            <div class="flex items-center"><div class="w-4 h-4 bg-yellow-300 mr-2"></div><span>Low Priority</span></div>
+            <div class="mt-2 pt-2 border-t">
+              <div class="flex items-center text-xs">
+                <div class="w-4 h-4 border-2 border-blue-500 bg-blue-100 mr-2"></div>
+                <span>High Density Area (≥<span id="legend-threshold">1000</span>/km²)</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -93,13 +185,16 @@
           <button id="filter-high" class="px-2 py-1 bg-red-600 text-white rounded small">High</button>
           <button id="filter-medium" class="px-2 py-1 bg-orange-400 text-white rounded small">Medium</button>
           <button id="filter-low" class="px-2 py-1 bg-yellow-300 rounded small">Low</button>
+          <button id="filter-high-density" class="px-2 py-1 bg-blue-500 text-white rounded small">High Density</button>
         </div>
       </div>
       <div id="table-container" class="text-sm overflow-auto" style="max-height:490px"></div>
     </div>
   </div>
 
-  <footer class="text-center mt-6 text-xs text-gray-600">Created for HOT / OSM workflows — Explode before analysis, fixed scoring, simple UI.</footer>
+  <footer class="text-center mt-6 text-xs text-gray-600">
+    Created for HOT / OSM workflows — Population density scoring improves targeting of urban areas.
+  </footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
@@ -138,6 +233,7 @@ function normalizeArray(arr){
   if(min===max) return nums.map(x=>isNaN(x)? NaN:0.5);
   return nums.map(x=>isNaN(x)? NaN:(x-min)/(max-min));
 }
+
 function quantileClass(scoreArr){
   const vals = scoreArr.filter(v=>!isNaN(v)).slice().sort((a,b)=>a-b);
   if(!vals.length) return scoreArr.map(_=>null);
@@ -149,6 +245,7 @@ function quantileClass(scoreArr){
     return 'HIGH';
   });
 }
+
 function downloadBlob(obj, filename){
   const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
   const url = URL.createObjectURL(blob);
@@ -164,8 +261,21 @@ let currentFeatures = [];
 function styleByPriority(f){
   const cls = f.properties?.priority_class;
   const colors = { 'HIGH':'#8B0000','MEDIUM':'#FF8C00','LOW':'#FFD54D','UNKNOWN':'#CCCCCC' };
-  return { color:'#fff', weight:1, fillColor:colors[cls||'UNKNOWN'], fillOpacity:0.7 };
+  
+  // Additional styling for high density areas
+  const isHighDensity = f.properties?.is_high_density === true;
+  const weight = isHighDensity ? 3 : 1;
+  const dashArray = isHighDensity ? '5,3' : null;
+  
+  return { 
+    color: isHighDensity ? '#1e40af' : '#fff', 
+    weight: weight, 
+    fillColor: colors[cls||'UNKNOWN'], 
+    fillOpacity: 0.7,
+    dashArray: dashArray
+  };
 }
+
 function refreshMap(features){
   if(geoLayer) geoLayer.remove();
   geoLayer = L.geoJSON(makeFeatureCollection(features),{
@@ -175,30 +285,41 @@ function refreshMap(features){
       let html = `<div class="small"><strong>ID:</strong> ${p._id||''}<br>`;
       html += `<strong>Priority:</strong> ${p.priority_class||'N/A'}<br>`;
       html += `<strong>Score:</strong> ${p.priority_score!==undefined? p.priority_score.toFixed(2): 'N/A'}<br>`;
-      html += `<strong>Population:</strong> ${p.population||''}<br>`;
-      html += `<strong>Unmapped%:</strong> ${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : p.unmapped_buildings_percent||''}</div>`;
+      html += `<strong>Population:</strong> ${p.population||'N/A'}<br>`;
+      html += `<strong>Area:</strong> ${p.area_km2!==undefined? p.area_km2.toFixed(2) : 'N/A'} km²<br>`;
+      html += `<strong>Density:</strong> ${p.population_density!==undefined? p.population_density.toFixed(1) : 'N/A'} people/km²<br>`;
+      html += `<strong>Unmapped%:</strong> ${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : (p.unmapped_buildings_percent||'N/A')}<br>`;
+      html += `<strong>High Density:</strong> ${p.is_high_density ? 'Yes' : 'No'}</div>`;
       layer.bindPopup(html);
     }
   }).addTo(map);
   try{ if(geoLayer.getBounds().isValid()) map.fitBounds(geoLayer.getBounds()); }catch(e){}
-  renderLegend();
-}
-function renderLegend(){
-  document.getElementById('legend').innerHTML = `<div class="legend bg-white p-2 rounded shadow small"><i style="background:#8B0000"></i> High &nbsp; <i style="background:#FF8C00; margin-left:10px"></i> Medium &nbsp; <i style="background:#FFD54D; margin-left:10px"></i> Low</div>`;
 }
 
-// ======= Core processing =======
+// ======= Core processing with density =======
 async function processFeatures(features){
   clearAlert();
   document.getElementById('loader').classList.remove('hidden');
   const enablePriority = document.getElementById('enable-priority').checked;
+  const densityThreshold = parseInt(document.getElementById('density-threshold').value);
 
-  features.forEach((f,i)=>{ if(!f.properties) f.properties={}; f.properties._id = f.id || f.properties._id || uid('area'); });
+  // Update legend threshold
+  document.getElementById('legend-threshold').textContent = densityThreshold;
 
+  features.forEach((f,i)=>{ 
+    if(!f.properties) f.properties={}; 
+    f.properties._id = f.id || f.properties._id || uid('area'); 
+  });
+
+  // Process each feature with Disaster Ninja API
   for(let i=0;i<features.length;i++){
     const f = features[i];
     const gtype = f.geometry?.type;
-    if(!gtype || !['Polygon','MultiPolygon'].includes(gtype)){ f.properties.processing_note='Skipped: not polygon'; continue; }
+    if(!gtype || !['Polygon','MultiPolygon'].includes(gtype)){ 
+      f.properties.processing_note='Skipped: not polygon'; 
+      continue; 
+    }
+    
     try{
       const res = await fetch('https://disaster.ninja/active/api/polygon_details', {
         method:'POST',
@@ -207,6 +328,7 @@ async function processFeatures(features){
       });
       if(!res.ok) throw new Error('API '+res.status);
       const data = await res.json();
+      
       data.forEach(item=>{
         const key = (item.name||'').toLowerCase().replace(/\s+/g,'_');
         if(item.name==='Population'){
@@ -214,59 +336,151 @@ async function processFeatures(features){
           const area = (item.text||'').match(/on ([0-9.]+) km2/);
           f.properties.population = pop? parseInt(pop[1].replace(/,/g,'')) : (item.rawValue||0);
           f.properties.area_km2 = area? parseFloat(area[1]) : (item.area_km2||0);
-        } else if(item.percentValue!==undefined) f.properties[`${key}_percent`] = item.percentValue;
+          
+          // Calculate population density
+          if(f.properties.population && f.properties.area_km2 && f.properties.area_km2 > 0){
+            f.properties.population_density = f.properties.population / f.properties.area_km2;
+            f.properties.is_high_density = f.properties.population_density >= densityThreshold;
+          }
+        } else if(item.percentValue!==undefined){
+          f.properties[`${key}_percent`] = item.percentValue;
+        }
       });
-    } catch(err){ console.error('polygon error',err); f.properties.processing_error=String(err); }
+    } catch(err){ 
+      console.error('polygon error',err); 
+      f.properties.processing_error=String(err); 
+    }
     await new Promise(r=>setTimeout(r,250));
   }
 
-  // Compute scoring
+  // Compute scoring with density-based weights
   if(enablePriority){
-    const popArr = features.map(f=> (f.properties && isFinite(f.properties.population))? +f.properties.population : NaN);
+    // Get weights from sliders
+    const weightDensity = parseInt(document.getElementById('density-weight').value) / 100;
+    const weightGap = parseInt(document.getElementById('gap-weight').value) / 100;
+    const weightTotalPop = parseInt(document.getElementById('totalpop-weight').value) / 100;
+    
+    // Get data arrays
+    const densityArr = features.map(f=> 
+      (f.properties && isFinite(f.properties.population_density))? 
+      +f.properties.population_density : NaN
+    );
+    
     const buildArr = features.map(f=>{
       const p = f.properties||{};
       if(isFinite(p.osm_gaps_percent)) return +p.osm_gaps_percent;
       if(isFinite(p.unmapped_buildings_percent)) return +p.unmapped_buildings_percent;
       return NaN;
     });
-
-    const popNorm = normalizeArray(popArr);
+    
+    const totalPopArr = features.map(f=> 
+      (f.properties && isFinite(f.properties.population))? 
+      +f.properties.population : NaN
+    );
+    
+    // Normalize arrays
+    const densityNorm = normalizeArray(densityArr);
     const buildNorm = normalizeArray(buildArr);
-    const hasPop = popNorm.some(v=>!isNaN(v)), hasBuild = buildNorm.some(v=>!isNaN(v));
-
-    let w = {pop:0.5, build:0.5};
-    const present = []; if(hasPop) present.push('pop'); if(hasBuild) present.push('build');
-    const totalRaw = present.reduce((s,k)=>s+w[k],0); present.forEach(k=>w[k]/=totalRaw);
-
-    features.forEach((f,i)=>{
-      let score=0, contributed=0;
-      if(hasPop && !isNaN(popNorm[i])){ score+=w.pop*popNorm[i]; contributed+=w.pop; }
-      if(hasBuild && !isNaN(buildNorm[i])){ score+=w.build*buildNorm[i]; contributed+=w.build; }
-      if(contributed && contributed!==1) score/=contributed;
-      f.properties.priority_score = isFinite(score)? score:NaN;
+    const totalPopNorm = normalizeArray(totalPopArr);
+    
+    // Check which variables are available
+    const available = [];
+    if(densityNorm.some(v=>!isNaN(v))) available.push('density');
+    if(buildNorm.some(v=>!isNaN(v))) available.push('gap');
+    if(totalPopNorm.some(v=>!isNaN(v))) available.push('totalpop');
+    
+    // Adjust weights based on available data
+    const baseWeights = {density: weightDensity, gap: weightGap, totalpop: weightTotalPop};
+    const totalWeight = available.reduce((sum, key) => sum + baseWeights[key], 0);
+    
+    const adjustedWeights = {};
+    available.forEach(key => {
+      adjustedWeights[key] = totalWeight > 0 ? baseWeights[key] / totalWeight : 1 / available.length;
     });
+    
+    // Calculate scores
+    features.forEach((f,i)=>{
+      let score = 0;
+      let contributedWeight = 0;
+      
+      if(adjustedWeights.density && !isNaN(densityNorm[i])){
+        score += adjustedWeights.density * densityNorm[i];
+        contributedWeight += adjustedWeights.density;
+      }
+      
+      if(adjustedWeights.gap && !isNaN(buildNorm[i])){
+        score += adjustedWeights.gap * buildNorm[i];
+        contributedWeight += adjustedWeights.gap;
+      }
+      
+      if(adjustedWeights.totalpop && !isNaN(totalPopNorm[i])){
+        score += adjustedWeights.totalpop * totalPopNorm[i];
+        contributedWeight += adjustedWeights.totalpop;
+      }
+      
+      // Normalize if not all weights were used
+      if(contributedWeight > 0 && contributedWeight < 1){
+        score /= contributedWeight;
+      }
+      
+      f.properties.priority_score = isFinite(score)? score : NaN;
+      f.properties._score_weights = adjustedWeights; // Store for debugging
+    });
+    
+    // Assign priority classes
     const scores = features.map(f=> isFinite(f.properties.priority_score)? f.properties.priority_score : NaN);
     const classes = quantileClass(scores);
-    features.forEach((f,i)=>{ f.properties.priority_class = classes[i]||'LOW'; });
+    features.forEach((f,i)=>{ 
+      f.properties.priority_class = classes[i] || 'LOW'; 
+    });
+    
+    // Update statistics
+    updateStatistics(features);
   }
 
   document.getElementById('loader').classList.add('hidden');
   return features;
 }
 
+function updateStatistics(features){
+  const withDensity = features.filter(f => f.properties.population_density).length;
+  const densities = features.map(f => f.properties.population_density).filter(d => d && isFinite(d));
+  const avgDensity = densities.length > 0 ? 
+    (densities.reduce((a,b) => a + b, 0) / densities.length).toFixed(1) : '-';
+  
+  document.getElementById('stat-count').textContent = features.length;
+  document.getElementById('stat-density').textContent = withDensity;
+  document.getElementById('stat-avg-density').textContent = avgDensity;
+}
+
 // ======= Table rendering & filters =======
 function renderTable(features){
   const container = document.getElementById('table-container');
-  const header = `<div class="grid grid-cols-6 gap-2 font-semibold small p-2 border-b"><div>ID</div><div>Area km²</div><div>Population</div><div>Unmapped%</div><div>Score</div><div>Priority</div></div>`;
+  const header = `<div class="grid grid-cols-8 gap-2 font-semibold small p-2 border-b">
+    <div>ID</div><div>Area km²</div><div>Pop.</div><div>Density</div><div>Unmapped%</div><div>Score</div><div>Priority</div><div>HD</div>
+  </div>`;
+  
   let rows='';
   features.forEach(f=>{
     const p = f.properties||{};
-    rows+=`<div class="grid grid-cols-6 gap-2 items-center p-2 border-b small"><div>${p._id||''}</div><div>${p.area_km2!==undefined? (Number(p.area_km2).toFixed(2)) : ''}</div><div>${p.population||''}</div><div>${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : (p.unmapped_buildings_percent||'')}</div><div>${isFinite(p.priority_score)? p.priority_score.toFixed(2):''}</div><div><span class="px-2 py-0.5 rounded text-xs ${p.priority_class==='HIGH'?'bg-red-600 text-white':(p.priority_class==='MEDIUM'?'bg-orange-400 text-white':'bg-yellow-200 text-gray-800')}">${p.priority_class||''}</span></div></div>`;
+    const density = p.population_density !== undefined ? 
+      `<span class="${p.is_high_density ? 'font-bold text-blue-700' : ''}">${p.population_density.toFixed(1)}</span>` : '';
+    
+    rows+=`<div class="grid grid-cols-8 gap-2 items-center p-2 border-b small hover:bg-gray-50">
+      <div class="truncate">${p._id||''}</div>
+      <div>${p.area_km2!==undefined? (Number(p.area_km2).toFixed(2)) : ''}</div>
+      <div>${p.population||''}</div>
+      <div>${density}</div>
+      <div>${p.osm_gaps_percent!==undefined? p.osm_gaps_percent : (p.unmapped_buildings_percent||'')}</div>
+      <div>${isFinite(p.priority_score)? p.priority_score.toFixed(2):''}</div>
+      <div><span class="px-2 py-0.5 rounded text-xs ${p.priority_class==='HIGH'?'bg-red-600 text-white':(p.priority_class==='MEDIUM'?'bg-orange-400 text-white':'bg-yellow-200 text-gray-800')}">${p.priority_class||''}</span></div>
+      <div class="text-center">${p.is_high_density ? '⭐' : ''}</div>
+    </div>`;
   });
   container.innerHTML = header+rows;
 }
 
-// ======= UI wiring =======
+// ======= UI Event Handlers =======
 const fileInput = document.getElementById('file-input');
 const fileSelectBtn = document.getElementById('file-select-btn');
 const pasteBtn = document.getElementById('paste-btn');
@@ -274,8 +488,30 @@ const geojsonText = document.getElementById('geojson-text');
 const processBtn = document.getElementById('process-btn');
 const downloadAllBtn = document.getElementById('download-all');
 const downloadHighBtn = document.getElementById('download-high');
-const maxSelect = document.getElementById('max-features');
 
+// Weight slider updates
+function updateWeightSliders(){
+  const density = parseInt(document.getElementById('density-weight').value);
+  const gap = parseInt(document.getElementById('gap-weight').value);
+  const totalpop = parseInt(document.getElementById('totalpop-weight').value);
+  
+  // Update display values
+  document.getElementById('density-weight-value').textContent = density;
+  document.getElementById('gap-weight-value').textContent = gap;
+  document.getElementById('totalpop-weight-value').textContent = totalpop;
+  
+  // Update density threshold display
+  document.getElementById('density-threshold-value').textContent = 
+    document.getElementById('density-threshold').value;
+}
+
+// Initialize slider updates
+['density-weight', 'gap-weight', 'totalpop-weight', 'density-threshold'].forEach(id => {
+  document.getElementById(id).addEventListener('input', updateWeightSliders);
+});
+updateWeightSliders();
+
+// File handling
 fileSelectBtn.addEventListener('click', e=>{ e.preventDefault(); fileInput.click(); });
 fileInput.addEventListener('change', e=>{
   const file = e.target.files[0];
@@ -289,32 +525,54 @@ fileInput.addEventListener('change', e=>{
 
 pasteBtn.addEventListener('click', e=>{ e.preventDefault(); geojsonText.focus(); });
 
+// Process button
 processBtn.addEventListener('click', async e=>{
   clearAlert();
   let data = parseGeoJSON(geojsonText.value);
   if(!data || !data.features) return showAlert('Invalid GeoJSON', 'error');
-  if(document.getElementById('explode-checkbox').checked) data.features = explodeToSinglePart(data.features);
-  if(data.features.length>parseInt(maxSelect.value)) showAlert(`Warning: ${data.features.length} polygons exceeds max safe ${maxSelect.value}`, 'error');
+  
+  if(document.getElementById('explode-checkbox').checked) {
+    data.features = explodeToSinglePart(data.features);
+  }
+  
+  const maxFeatures = parseInt(document.getElementById('max-features').value);
+  if(data.features.length > maxFeatures) {
+    showAlert(`Warning: ${data.features.length} polygons exceeds max safe ${maxFeatures}`, 'error');
+  }
+  
   currentFeatures = await processFeatures(data.features);
-  refreshMap(currentFeatures); renderTable(currentFeatures);
-  downloadAllBtn.disabled=false; downloadHighBtn.disabled=false;
+  refreshMap(currentFeatures); 
+  renderTable(currentFeatures);
+  
+  downloadAllBtn.disabled=false; 
+  downloadHighBtn.disabled=false;
 });
 
+// Download buttons
 downloadAllBtn.addEventListener('click', e=>{
   const ts = new Date().toISOString().replace(/[:.]/g,'-');
   downloadBlob(makeFeatureCollection(currentFeatures), originalFilename+'_'+ts+'.geojson');
 });
+
 downloadHighBtn.addEventListener('click', e=>{
   const ts = new Date().toISOString().replace(/[:.]/g,'-');
   const high = currentFeatures.filter(f=>f.properties?.priority_class==='HIGH');
   downloadBlob(makeFeatureCollection(high), originalFilename+'_'+ts+'_high.geojson');
 });
 
-// ======= Filters =======
+// Filters
 document.getElementById('filter-all').addEventListener('click', ()=>renderTable(currentFeatures));
 document.getElementById('filter-high').addEventListener('click', ()=>renderTable(currentFeatures.filter(f=>f.properties?.priority_class==='HIGH')));
 document.getElementById('filter-medium').addEventListener('click', ()=>renderTable(currentFeatures.filter(f=>f.properties?.priority_class==='MEDIUM')));
 document.getElementById('filter-low').addEventListener('click', ()=>renderTable(currentFeatures.filter(f=>f.properties?.priority_class==='LOW')));
+document.getElementById('filter-high-density').addEventListener('click', ()=>{
+  renderTable(currentFeatures.filter(f=>f.properties?.is_high_density===true));
+});
+
+// Auto-enable process button when typing in GeoJSON textarea
+geojsonText.addEventListener('input', function(){
+  processBtn.disabled = this.value.trim() === '';
+});
 </script>
 </body>
 </html>
