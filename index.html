@@ -1,64 +1,123 @@
-// Compute scoring (hazard ignored completely)
-if (enablePriority) {
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Priority Mapping Tool</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { margin: 0; font-family: sans-serif; }
+    #map { height: 100vh; width: 100%; }
+    .panel { position: absolute; top: 10px; left: 10px; z-index: 9999; background: white; padding: 10px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.2); }
+    .legend { position: absolute; bottom: 10px; left: 10px; z-index: 9999; background: white; padding: 10px; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <input type="file" id="fileInput" accept="application/geo+json,.geojson,.json" />
+    <br><br>
+    <label><input type="checkbox" id="toggleTable" checked /> Show Table</label>
+  </div>
 
-  // Extract numeric arrays
-  const popArr = features.map(f =>
-    (f.properties && isFinite(f.properties.population)) ? +f.properties.population : NaN
-  );
+  <div id="map"></div>
+  <div class="legend" id="legend"></div>
 
-  const buildArr = features.map(f => {
-    const p = f.properties || {};
-    if (isFinite(p.osm_gaps_percent)) return +p.osm_gaps_percent;
-    if (isFinite(p.unmapped_buildings_percent)) return +p.unmapped_buildings_percent;
-    if (isFinite(p.buildings_percent)) return +p.buildings_percent;
-    return NaN;
-  });
+<script>
+let map = L.map('map').setView([0, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
-  // Normalize
-  const popNorm = normalizeArray(popArr);
-  const buildNorm = normalizeArray(buildArr);
+let geoLayer;
 
-  const hasPop = popNorm.some(v => !isNaN(v));
-  const hasBuild = buildNorm.some(v => !isNaN(v));
+const priorityColors = {
+  low: '#66bb6a',
+  medium: '#ffa726',
+  high: '#ef5350'
+};
 
-  // New weights — ONLY pop + building
-  // 0.5 population + 0.5 building
-  let w = { pop: 0.5, build: 0.5 };
+function priorityCategory(score){
+  if(score >= 0.66) return 'high';
+  if(score >= 0.33) return 'medium';
+  return 'low';
+}
 
-  if (!hasPop && !hasBuild) {
-    // no data at all
-    features.forEach(f => {
-      f.properties.priority_score = NaN;
-      f.properties.priority_class = 'LOW';
-    });
-  } else {
-    // Recalculate scores
-    features.forEach((f, i) => {
-      let score = 0;
-      let contributed = 0;
+function explodeMultipolygon(feature){
+  if(feature.geometry.type !== 'MultiPolygon') return [feature];
+  return feature.geometry.coordinates.map(poly => ({
+    type: 'Feature',
+    properties: { ...feature.properties },
+    geometry: { type: 'Polygon', coordinates: poly }
+  }));
+}
 
-      if (hasPop && !isNaN(popNorm[i])) {
-        score += w.pop * popNorm[i];
-        contributed += w.pop;
-      }
-
-      if (hasBuild && !isNaN(buildNorm[i])) {
-        score += w.build * buildNorm[i];
-        contributed += w.build;
-      }
-
-      if (contributed && contributed !== 1) score = score / contributed;
-
-      f.properties.priority_score = isFinite(score) ? score : NaN;
-    });
-
-    // Classify
-    const scores = features.map(f =>
-      isFinite(f.properties.priority_score) ? f.properties.priority_score : NaN
-    );
-    const classes = quantileClass(scores);
-    features.forEach((f, i) => {
-      f.properties.priority_class = classes[i] || 'LOW';
-    });
+async function fetchDisasterNinjaData(lat, lon){
+  try{
+    const url = `https://disaster.ninja/api/v1/population?lat=${lat}&lon=${lon}`;
+    const res = await fetch(url);
+    if(!res.ok) return null;
+    return await res.json();
+  } catch{
+    return null;
   }
 }
+
+document.getElementById('fileInput').addEventListener('change', async function(){
+  const file = this.files[0];
+  if(!file) return;
+  const text = await file.text();
+  const geojson = JSON.parse(text);
+
+  let features = [];
+  geojson.features.forEach(f => { features.push(...explodeMultipolygon(f)); });
+
+  let enriched = [];
+  for(const f of features){
+    const center = turf.centerOfMass(f).geometry.coordinates;
+    const [lon, lat] = center;
+    const data = await fetchDisasterNinjaData(lat, lon);
+
+    const pop = data?.population_density || 0;
+    const unmapped = data?.unmapped_buildings_pct || 0;
+
+    const score = (pop * 0.6) + ((unmapped/100) * 0.4);
+    const category = priorityCategory(score);
+
+    f.properties.pop_density = pop;
+    f.properties.unmapped_pct = unmapped;
+    f.properties.priority_score = score.toFixed(3);
+    f.properties.priority = category;
+
+    enriched.push(f);
+  }
+
+  if(geoLayer) map.removeLayer(geoLayer);
+  geoLayer = L.geoJSON(enriched,{
+    style: f => ({ color: priorityColors[f.properties.priority], weight: 1, fillOpacity: 0.5 }),
+    onEachFeature: (feature, layer) => {
+      layer.bindPopup(`
+        <b>Priority:</b> ${feature.properties.priority}<br>
+        <b>Score:</b> ${feature.properties.priority_score}<br>
+        <b>Pop density:</b> ${feature.properties.pop_density}<br>
+        <b>Unmapped buildings %:</b> ${feature.properties.unmapped_pct}
+      `);
+    }
+  }).addTo(map);
+
+  map.fitBounds(geoLayer.getBounds());
+
+  updateLegend();
+});
+
+function updateLegend(){
+  const legend = document.getElementById('legend');
+  legend.innerHTML = `
+    <b>Priority Legend</b><br>
+    <span style="background:${priorityColors.low};padding:3px 8px;border-radius:4px;">Low</span><br><br>
+    <span style="background:${priorityColors.medium};padding:3px 8px;border-radius:4px;">Medium</span><br><br>
+    <span style="background:${priorityColors.high};padding:3px 8px;border-radius:4px;">High</span>
+  `;
+}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+</body>
+</html>
